@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MinervaFrontline — Status Bar with Collapsable toolbar (Collapsed)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bar:#1a1a1a; --card:#323232; --black:#000; --white:#fff;
+    --font:'Roboto',-apple-system,'Segoe UI',Arial,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:#000;overflow:hidden;font-family:var(--font);color:var(--white)}
+  .viewport{position:fixed;inset:0;overflow:hidden;background:#000}
+  /* top-left origin + JS translate centers the canvas AND guarantees the header
+     (top edge) stays visible even if scripts are blocked in the viewer */
+  .stage{position:absolute;top:0;left:0;width:1920px;height:1200px;transform-origin:top left;
+    background:#0d0f10;overflow:hidden;box-shadow:0 20px 80px rgba(0,0,0,.6)}
+  .layer{position:absolute}
+
+  /* background aerial map */
+  #map-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;z-index:1}
+  #map-fallback{position:absolute;inset:0;z-index:0}
+  #map-fallback rect.base{filter:url(#terrain)}
+
+  /* top status bar */
+  .topbar{left:0;top:0;width:1920px;height:60px;background:var(--bar);z-index:40}
+  .logo{position:absolute;left:16px;top:14px;width:100px;height:32px;display:block}
+  .logo svg{display:block;width:100px;height:32px}
+  .sys{position:absolute;right:16px;top:0;height:60px;display:flex;flex-wrap:nowrap;
+    align-items:center;justify-content:flex-end;gap:24px}
+  .sys .ico{display:flex;align-items:center;flex:0 0 auto}
+  .sys .ico svg{display:block}
+  .sys .ico-batt svg{width:40px;height:20px}
+  .sys .ico-sig  svg{width:32px;height:32px}
+  .sys .time{flex:0 0 auto;font-weight:400;font-size:32px;line-height:38px;color:#fff;
+    white-space:nowrap;font-variant-numeric:tabular-nums}
+
+  /* white touch tiles */
+  .rail{position:absolute;background:var(--black);z-index:30}
+  .tile{position:absolute;width:120px;height:120px;background:var(--white);display:flex;
+    align-items:center;justify-content:center;cursor:pointer;transition:filter .15s ease, transform .06s ease}
+  .tile:hover{filter:brightness(.93)}
+  .tile:active{transform:scale(.97)}
+  .tile.bordered{border:0.628px solid #000}
+  .tile svg{width:44px;height:44px;display:block}
+  .rail-left{left:0;top:834px;width:168px;height:366px}
+  .rail-left .tile.shot{left:24px;top:27px}
+  .rail-left .tile.menu{left:24px;top:236px}
+  .rail-funnel{left:1752px;top:196px;width:168px;height:168px}
+  .rail-funnel .tile{left:24px;top:24px}
+
+  /* radar leader connectors (short, blip → data block) */
+  #leaders{position:absolute;inset:0;z-index:8;pointer-events:none}
+
+  /* drone blips */
+  .marker{position:absolute;width:112px;height:112px;border-radius:100px;background:var(--black);
+    display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px;cursor:pointer;z-index:30;
+    transition:transform .12s ease, box-shadow .15s ease}
+  .marker:hover{transform:scale(1.04);box-shadow:0 6px 20px rgba(0,0,0,.55)}
+  .marker svg{width:64px;height:64px;display:block}
+  /* label lives INSIDE the marker, so the marker's hover-scale enlarges it too */
+  .badge{position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:31;pointer-events:none;
+    font-weight:700;font-size:24px;line-height:24px;color:#fff;white-space:nowrap;
+    text-shadow:0 1px 3px rgba(0,0,0,.95),0 0 2px rgba(0,0,0,.9)}
+  #srk{left:451px;top:421px}
+  #isr{left:563px;top:533px}
+
+  /* info data-blocks (beside each blip, no overlap) */
+  .card{position:absolute;width:280px;background:var(--card);z-index:12;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px 16px;
+    transition:filter .15s ease}
+  .card:hover{filter:brightness(1.12)}
+  .card .name{font-weight:500;font-size:32px;line-height:40px;color:#fff;white-space:nowrap}
+  .card .meta{display:flex;align-items:center;gap:20px;height:40px}
+  .card .meta .stat{display:flex;align-items:center;gap:14px}
+  .card .meta .val{font-weight:400;font-size:32px;line-height:38px;color:#fff}
+  .card .meta svg{display:block}
+  #card-strike{left:131px;top:421px}
+  #card-isr{left:479px;top:704px}   /* below the ISR blip, clear of the takeoff/orbit POIs on the right */
+
+  /* UX 1 — linked highlight (monochrome: white ring + dark halo, no colour) */
+  .marker.hl,.marker.sel{transform:scale(1.04);
+    box-shadow:0 0 0 3px #fff, 0 0 0 6px rgba(0,0,0,.6), 0 6px 20px rgba(0,0,0,.55)}
+  .card.hl,.card.sel{filter:brightness(1.14);
+    box-shadow:inset 5px 0 0 #fff, 0 0 0 2px rgba(255,255,255,.9), 0 6px 20px rgba(0,0,0,.45)}
+  #leaders g.hl line,#leaders g.sel line{stroke:#fff;stroke-opacity:1;stroke-width:3}
+  #leaders g.hl circle,#leaders g.sel circle{fill:#fff;r:4.5}
+  .card{cursor:pointer}
+  /* UX 2 — visible keyboard focus for tab / gloved use (white outline + dark halo) */
+  .tile:focus-visible,.marker:focus-visible,.card:focus-visible{
+    outline:3px solid #fff;outline-offset:3px;box-shadow:0 0 0 6px rgba(0,0,0,.6)}
+  /* UX 3 — tactile press feedback on the white tiles */
+  .tile:active{background:#e9edf1}
+  /* UX 4 — screenshot capture flash */
+  #flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:50}
+  #flash.go{animation:flash .32s ease-out}
+  @keyframes flash{0%{opacity:.85}100%{opacity:0}}
+
+  /* ===== long-press radial menu — hybrid (Figma look + improved UX) ===== */
+  /* dim scrim behind the menu for focus + legibility (still monochrome) */
+  #radial-scrim{position:absolute;inset:0;z-index:55;background:rgba(0,0,0,.30);display:none}
+  #radial-scrim.on{display:block;animation:fade .12s ease-out}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  /* long-press progress ring drawn around the drone being held */
+  #lp-ring{position:absolute;width:132px;height:132px;z-index:57;display:none;pointer-events:none;border-radius:50%;
+    background:conic-gradient(#fff calc(var(--p,0) * 1deg), rgba(255,255,255,.22) 0);
+    -webkit-mask:radial-gradient(circle, transparent 56px, #000 57px);
+            mask:radial-gradient(circle, transparent 56px, #000 57px)}
+  #lp-ring.on{display:block}
+  .marker.sel{z-index:57}   /* keep the held/selected drone above the scrim */
+  /* takeoff task marker placed on the map while the drawer is open */
+  #tk-marker{position:absolute;width:64px;height:64px;border-radius:50%;background:#fff;border:2px solid #000;
+    display:none;align-items:center;justify-content:center;z-index:35;box-shadow:0 0 0 5px rgba(0,0,0,.35)}
+  #tk-marker.on{display:flex;animation:pop .14s ease-out}
+  #tk-marker svg{width:38px;height:38px}
+  /* loiter orbit circle overlay */
+  #lo-circle{position:absolute;z-index:34;display:none;pointer-events:none}
+  #lo-circle.on{display:block}
+  #lo-circle .ring{position:absolute;inset:0;width:100%;height:100%;overflow:visible;
+    filter:drop-shadow(0 0 3px rgba(0,0,0,.6))}
+  #lo-circle .lc-ic{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:56px;height:56px;
+    border-radius:50%;background:#000;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 0 2px rgba(255,255,255,.9),0 0 0 5px rgba(0,0,0,.4)}
+  #lo-arrow{position:absolute;inset:0;z-index:33;display:none;pointer-events:none}
+  #lo-arrow.on{display:block}
+  #lo-arrow line{filter:drop-shadow(0 0 2px rgba(0,0,0,.6))}
+  #lo-circle .lc-ic svg{width:32px;height:32px}
+  #lo-circle .lc-turns{position:absolute;left:50%;top:calc(50% + 36px);transform:translateX(-50%);border-radius:4px;
+    background:rgba(20,20,20,.85);color:#fff;font:600 24px var(--font);padding:4px 12px;white-space:nowrap}
+
+  .radial{position:absolute;left:120px;top:660px;width:460px;height:460px;z-index:60;display:none}
+  .radial.on{display:block;animation:pop .12s ease-out}
+  @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+  .radial *{box-sizing:border-box}
+  .radial::before{content:"";position:absolute;inset:0;border-radius:50%;
+    box-shadow:0 16px 48px rgba(0,0,0,.6);z-index:0}
+  /* each option is a FULL half-disc = large, unambiguous hit target */
+  .radial .wedge{position:absolute;top:0;height:460px;width:230px;border:none;padding:0;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:background .12s ease}
+  .radial .wedge .in{display:flex;flex-direction:column;align-items:center;gap:10px;pointer-events:none}
+  .radial .wedge .lb{font-size:30px;line-height:36px}
+  .radial .wedge svg{width:44px;height:44px;display:block;stroke:currentColor}
+  .radial .wedge.left{left:0;background:#fff;color:#000;border-radius:230px 0 0 230px}
+  .radial .wedge.right{left:230px;background:#111;color:#fff;border-radius:0 230px 230px 0}
+  .radial .wedge.left .in{transform:translateX(-28px)}   /* keep labels clear of the centre */
+  .radial .wedge.right .in{transform:translateX(28px)}
+  .radial .wedge.left:hover,.radial .wedge.left:focus-visible{background:#e6e6e6}
+  .radial .wedge.right:hover,.radial .wedge.right:focus-visible{background:#282828}
+  .radial .wedge.left:active{background:#d2d2d2}
+  .radial .wedge.right:active{background:#363636}
+  .radial .wedge:focus-visible{outline:3px solid #8a8a8a;outline-offset:-10px}
+  /* plan submenu: single full-disc target */
+  .radial .wedge.full{left:0;width:460px;height:460px;background:#fff;color:#000;border-radius:50%}
+  .radial .wedge.full:hover,.radial .wedge.full:focus-visible{background:#ededed}
+  .radial .wedge.full .in{position:absolute;left:336px;top:150px}
+  /* center action (Exit / Back) sits above the wedges */
+  .radial .center{position:absolute;left:150px;top:150px;width:160px;height:160px;border-radius:50%;
+    background:#000;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:6px;cursor:pointer;border:none;z-index:2;transition:background .12s ease}
+  .radial .center svg{width:44px;height:44px;stroke:currentColor}
+  .radial .center .lb{font-size:30px;line-height:34px}
+  .radial .center:hover{background:#1c1c1c}
+  .radial .center:focus-visible{outline:3px solid #fff;outline-offset:4px}
+  /* level caption (reper for the current submenu) */
+  .radial .level{position:absolute;left:0;right:0;top:44px;text-align:center;z-index:2;
+    font-size:20px;letter-spacing:3px;color:#000;display:none;pointer-events:none}
+  /* expanded submenu: four quarter-disc buttons (each highlights its own quarter on hover) */
+  .radial .qbtn{position:absolute;width:230px;height:230px;z-index:1;border:none;cursor:pointer;padding:0;
+    overflow:hidden;transition:background .12s}
+  .radial .qbtn .in{position:absolute;width:160px;display:flex;flex-direction:column;align-items:center;gap:8px;
+    pointer-events:none;font-family:var(--font)}
+  .radial .qbtn svg{width:44px;height:44px;stroke:currentColor}
+  .radial .qbtn .lb{font-size:25px;line-height:29px;text-align:center}
+  .radial .qbtn.tl{left:0;top:0;border-radius:230px 0 0 0;background:#fff;color:#000}
+  .radial .qbtn.tr{left:230px;top:0;border-radius:0 230px 0 0;background:#fff;color:#000}
+  .radial .qbtn.bl{left:0;top:230px;border-radius:0 0 0 230px;background:#111;color:#fff}
+  .radial .qbtn.br{left:230px;top:230px;border-radius:0 0 230px 0;background:#111;color:#fff}
+  /* content centred symmetrically in each quadrant (abs x 124 / 336, clear of outer curve + centre) */
+  .radial .qbtn.tl .in{left:44px;top:78px}
+  .radial .qbtn.tr .in{left:26px;top:78px}
+  .radial .qbtn.bl .in{left:44px;top:70px}
+  .radial .qbtn.br .in{left:26px;top:70px}
+  .radial .qbtn.tl:hover,.radial .qbtn.tr:hover,.radial .qbtn.tl:focus-visible,.radial .qbtn.tr:focus-visible{background:#dcdcdc}
+  .radial .qbtn.bl:hover,.radial .qbtn.br:hover,.radial .qbtn.bl:focus-visible,.radial .qbtn.br:focus-visible{background:#2c2c2c}
+  .radial .qbtn:focus-visible{outline:none}
+  /* pages: main ⇄ submenu (takeoff / expanded) — these rules come LAST so they win */
+  .radial .page-takeoff,.radial .page-expanded,.radial .page-sub{display:none!important}
+  .radial.plan .page-main{display:none!important}
+  .radial.plan .page-sub{display:flex!important}              /* Back centre, always in submenu */
+  .radial.plan .level{display:block}
+  .radial.plan:not(.expanded) .page-takeoff{display:flex!important}   /* before a takeoff point is placed */
+  .radial.plan.expanded .page-expanded{display:flex!important}        /* after a takeoff point is placed */
+  /* the radial menu is the expanded toolbar → hide the edge rails while it is open */
+  .menu-open .rail{display:none}
+
+  /* ===== Takeoff Task Properties drawer (Figma 783:12871) + reworked inputs ===== */
+  #takeoff,#loiter{position:absolute;top:60px;right:0;width:700px;height:1140px;background:var(--bar);color:#fff;
+    z-index:52;display:none;box-shadow:-16px 0 48px rgba(0,0,0,.5)}
+  #takeoff.on,#loiter.on{display:block;animation:slidein .18s ease-out}
+  @keyframes slidein{from{transform:translateX(48px);opacity:.3}to{transform:translateX(0);opacity:1}}
+  #takeoff .tk-title,#loiter .tk-title{position:absolute;left:40px;top:60px;font-weight:700;font-size:36px;line-height:1;margin:0}
+  #takeoff .tk-close,#loiter .tk-close{position:absolute;top:24px;right:40px;width:120px;height:120px;background:var(--bar);
+    border:1px solid #fff;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  #takeoff .tk-close:hover,#loiter .tk-close:hover{background:#262626}
+  #takeoff .tk-close svg,#loiter .tk-close svg{width:44px;height:44px;stroke:#fff}
+  #takeoff .tk-body,#loiter .tk-body{position:absolute;left:40px;right:40px;top:196px;bottom:24px;overflow-y:auto;padding-right:8px}
+  #takeoff .tk-body::-webkit-scrollbar,#loiter .tk-body::-webkit-scrollbar{width:12px}
+  #takeoff .tk-body::-webkit-scrollbar-thumb,#loiter .tk-body::-webkit-scrollbar-thumb{background:#d9d9d9;border-radius:8px}
+  #takeoff .tk-body::-webkit-scrollbar-track,#loiter .tk-body::-webkit-scrollbar-track{background:transparent}
+  /* reworked numeric field: −  editable value + unit  + */
+  .tk-field{margin-bottom:44px}
+  .tk-field>.lbl{display:block;font-weight:700;font-size:30px;margin-bottom:16px;letter-spacing:.3px}
+  /* one grouped segmented stepper: [ −  |  value unit  |  + ] */
+  .tk-field .stepper{display:flex;align-items:stretch;height:112px;width:100%;background:#141414;
+    border:1px solid #8a8a8a;border-radius:6px;overflow:hidden;transition:border-color .12s,box-shadow .12s}
+  .tk-field .stepper:hover{border-color:#c4c4c4}
+  .tk-field .stepper:focus-within{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.4)}
+  .tk-field.has-error .stepper{border-color:#fff;box-shadow:0 0 0 2px #fff,0 0 0 6px rgba(255,255,255,.25)}
+  .tk-field .step{width:104px;flex:0 0 auto;background:#141414;border:none;color:#fff;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:background .1s}
+  .tk-field .step svg{width:40px;height:40px;stroke:#fff}
+  .tk-field .step.dec{border-right:1px solid #6a6a6a}
+  .tk-field .step.inc{border-left:1px solid #6a6a6a}
+  .tk-field .step:hover{background:#2a2a2a}
+  .tk-field .step:active{background:#3d3d3d}
+  .tk-field .step:focus-visible{outline:3px solid #fff;outline-offset:-7px}
+  .tk-field .step:disabled{opacity:.3;cursor:not-allowed;background:#141414}
+  .tk-field .valwrap{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 22px;
+    cursor:text;background:#141414;transition:background .12s}
+  .tk-field .valwrap:hover{background:#1d1d1d}
+  .tk-field .stepper:focus-within .valwrap{background:#202020}
+  .tk-field .valwrap .num{width:1ch;background:transparent;border:none;color:#fff;text-align:right;
+    font:600 46px var(--font);outline:none;padding:0;caret-color:#fff;-moz-appearance:textfield}
+  .tk-field .valwrap .num::-webkit-outer-spin-button,.tk-field .valwrap .num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .tk-field .valwrap .unit{font:400 30px var(--font);color:#b8b8b8;flex:0 0 auto;transform:translateY(5px)}
+  .tk-field .valwrap.changed{animation:vpulse .4s ease-out}
+  @keyframes vpulse{0%{background:#3a3a3a}100%{background:#141414}}
+  .tk-field .hint{margin-top:12px;font-size:20px;letter-spacing:.4px;color:#8f8f8f}
+  .tk-field .err{display:none;align-items:center;gap:10px;margin-top:12px;font-size:22px;color:#ededed}
+  .tk-field .err svg{width:26px;height:26px;flex:0 0 auto;stroke:#fff}
+  .tk-field.has-error .err{display:flex}
+  .tk-field.has-error .hint{display:none}
+  .tk-btn{display:flex;align-items:center;justify-content:center;gap:22px;width:100%;height:120px;
+    background:var(--bar);border:1px solid #fff;color:#fff;font-weight:600;font-size:32px;cursor:pointer;margin-top:8px}
+  .tk-btn svg{width:44px;height:44px;stroke:#fff}
+  .tk-btn:hover{background:#262626}
+  .tk-btn:focus-visible{outline:3px solid #fff;outline-offset:-6px}
+  .tk-sep{height:2px;width:100%;background:#fff;margin:24px 0;border:none}
+  .tk-btn.armed{border-color:#fff;background:#3a3a3a}
+  /* while the drawer is open, clear the map labels so the panel edge stays clean */
+  .takeoff-open .card,.takeoff-open #leaders,.loiter-open .card,.loiter-open #leaders{display:none}
+
+  /* ===== Loiter drawer — full-width controls + improved input types ===== */
+  #loiter .tk-field .stepper{width:100%}
+  #loiter .tk-btn,#loiter .tk-sep{width:100%}
+  .lo-field{margin-bottom:40px}
+  .lo-field>.lbl{display:block;font-weight:700;font-size:30px;margin-bottom:16px}
+  .lo-row{display:flex;gap:24px}
+  /* read-only value field (coordinate) */
+  .lo-ro{flex:1;min-width:0;height:112px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:0 22px;border:1px solid #6a6a6a;border-radius:6px;background:#141414}
+  .lo-ro .v{font:600 33px var(--font);color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lo-ro .u{font-size:28px;color:#b8b8b8;flex:0 0 auto}
+  /* styled dropdown */
+  .lo-select{position:relative;width:100%;height:112px}
+  .lo-select select{width:100%;height:112px;-webkit-appearance:none;appearance:none;background:#141414;
+    border:1px solid #8a8a8a;border-radius:6px;color:#fff;font:400 34px var(--font);padding:0 68px 0 22px;cursor:pointer;outline:none}
+  .lo-select select:hover{border-color:#c4c4c4}
+  .lo-select select:focus-visible{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.4)}
+  .lo-select .caret{position:absolute;right:22px;top:50%;transform:translateY(-50%);pointer-events:none}
+  .lo-select .caret svg{width:34px;height:34px;stroke:#fff}
+  /* read-only readouts (info) */
+  .lo-readouts{display:flex;gap:64px;margin-bottom:40px}
+  .lo-readout .k{font-size:26px;color:#cfcfcf;margin-bottom:8px}
+  .lo-readout .rv{font-weight:500;font-size:34px;color:#fff}
+  /* monochrome toggle switch */
+  .lo-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:34px}
+  .lo-toggle-row .lbl{font-weight:700;font-size:30px}
+  .lo-toggle{flex:0 0 auto;width:96px;height:52px;border-radius:26px;border:2px solid #fff;background:#141414;
+    position:relative;cursor:pointer;transition:background .15s;padding:0}
+  .lo-toggle::after{content:"";position:absolute;top:5px;left:5px;width:38px;height:38px;border-radius:50%;background:#fff;transition:left .15s,background .15s}
+  .lo-toggle[aria-checked="true"]{background:#fff}
+  .lo-toggle[aria-checked="true"]::after{left:49px;background:#141414}
+  .lo-toggle:focus-visible{outline:3px solid #fff;outline-offset:3px}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="viewport">
+  <main class="stage" id="stage" aria-label="Ground station map view">
+
+    <!-- ========== BACKGROUND MAP ========== -->
+    <svg id="map-fallback" viewBox="0 0 1920 1200" preserveAspectRatio="none" aria-hidden="true">
+      <defs><filter id="terrain" x="0" y="0" width="100%" height="100%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.012 0.016" numOctaves="5" seed="7" result="n"/>
+        <feColorMatrix in="n" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.4 1" result="a"/>
+        <feFlood flood-color="#8b8b8b" result="soil"/><feComposite in="soil" in2="a" operator="in"/>
+      </filter></defs>
+      <rect x="0" y="0" width="1920" height="1200" fill="#707070"/>
+      <rect class="base" x="0" y="0" width="1920" height="1200" opacity="0.85"/>
+    </svg>
+    <img id="map-photo" alt="Aerial reconnaissance map" src="assets/map.png" onerror="this.remove()">
+
+    <!-- ========== TOP STATUS BAR ========== -->
+    <header class="topbar layer">
+      <span class="logo" aria-label="MinervaFrontline">
+        <svg viewBox="0 0 100 33" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path fill-rule="evenodd" clip-rule="evenodd" d="M38.8532 0.0348017L61.4435 32.2631L42.1072 32.2295L31.3396 16.0462L19.7809 32.2295L0 32.2696L22.6812 0.0117188L38.8532 0.0348017Z" fill="white"/>
+          <path d="M99.9833 32.258H80.7008L69.4258 16.1289H88.6777L99.9833 32.258Z" fill="white"/>
+          <path d="M61.4501 1.51499e-05L50.1445 16.1291H69.427L80.7021 0L61.4501 1.51499e-05Z" fill="white"/>
+        </svg>
+      </span>
+      <div class="sys">
+        <span class="ico ico-batt" aria-label="Battery">
+          <svg viewBox="0 0 40 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M39.9986 19.9645H5.04297V0H39.9986V19.9645ZM37.2277 3.48135H8.66641V15.9858H37.2277V3.48135Z" fill="white"/>
+            <path d="M7.17584 6.03906H0V13.7833H7.17584V6.03906Z" fill="white"/>
+            <path d="M22.5943 5.04297H10.0898V14.5634H22.5943V5.04297Z" fill="white"/>
+          </svg>
+        </span>
+        <span class="ico ico-sig" aria-label="Signal">
+          <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M0.0742188 32.0484H8.04922V16.0984H0.0742188V32.0484ZM2.29922 18.4234H6.27422V30.3734H2.29922V18.4234ZM12.0242 32.0484H19.9992V8.12344H12.0242V32.0484ZM14.2492 10.4734H18.2242V30.3984H14.2492V10.4734ZM23.9742 1.14844V32.0734H31.9492V1.14844H23.9742ZM30.1992 30.3734H26.2242V3.49844H30.1992V30.3984V30.3734Z" fill="white"/>
+            <path d="M6.97422 16.9492H1.19922V31.2492H6.97422V16.9492Z" fill="white"/>
+            <path d="M18.975 9.47656H13.75V31.2516H18.975V9.47656Z" fill="white"/>
+            <path d="M31.4242 1.92578H25.1992V31.1508H31.4242V1.92578Z" fill="white"/>
+          </svg>
+        </span>
+        <span class="time">9 Jul 09:14</span>
+      </div>
+    </header>
+
+    <!-- ========== LEFT RAIL ========== -->
+    <section class="rail rail-left" aria-label="Toolbar">
+      <button class="tile shot" id="btn-shot" aria-label="Screenshot">
+        <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g clip-path="url(#cs)"><path fill-rule="evenodd" clip-rule="evenodd" d="M39.0156 40.768H4.98438C2.23438 40.768 0 38.5336 0 35.7836V15.6742C0 12.9586 2.23438 10.7242 4.98438 10.7242H10.6906C10.8281 8.07734 12.9937 5.98047 15.6406 5.98047H28.4281C31.1094 5.98047 33.275 8.07734 33.3781 10.7242H39.05C41.8 10.7242 44.0344 12.9586 44.0344 15.7086V35.818C44.0344 38.568 41.8 40.8023 39.05 40.8023L39.0156 40.768ZM21.7594 14.7461C15.6062 14.7461 10.6562 19.7305 10.6562 25.8492C10.6562 31.968 15.6406 36.9523 21.7594 36.9523C27.8781 36.9523 32.8625 31.968 32.8625 25.8492C32.8625 19.7305 27.8781 14.7461 21.7594 14.7461ZM21.7594 33.9273C17.2906 33.9273 13.6812 30.318 13.6812 25.8492C13.6812 21.3805 17.2906 17.7711 21.7594 17.7711C26.2281 17.7711 29.8375 21.3805 29.8375 25.8492C29.8375 30.318 26.2281 33.9273 21.7594 33.9273Z" fill="black"/></g>
+          <defs><clipPath id="cs"><rect width="44" height="44" fill="white"/></clipPath></defs>
+        </svg>
+      </button>
+      <button class="tile menu bordered" aria-label="Menu">
+        <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M38.5 22C38.5 22.3647 38.3551 22.7144 38.0973 22.9723C37.8394 23.2301 37.4897 23.375 37.125 23.375H6.875C6.51033 23.375 6.16059 23.2301 5.90273 22.9723C5.64487 22.7144 5.5 22.3647 5.5 22C5.5 21.6353 5.64487 21.2856 5.90273 21.0277C6.16059 20.7699 6.51033 20.625 6.875 20.625H37.125C37.4897 20.625 37.8394 20.7699 38.0973 21.0277C38.3551 21.2856 38.5 21.6353 38.5 22ZM6.875 12.375H37.125C37.4897 12.375 37.8394 12.2301 38.0973 11.9723C38.3551 11.7144 38.5 11.3647 38.5 11C38.5 10.6353 38.3551 10.2856 38.0973 10.0277C37.8394 9.76987 37.4897 9.625 37.125 9.625H6.875C6.51033 9.625 6.16059 9.76987 5.90273 10.0277C5.64487 10.2856 5.5 10.6353 5.5 11C5.5 11.3647 5.64487 11.7144 5.90273 11.9723C6.16059 12.2301 6.51033 12.375 6.875 12.375ZM37.125 31.625H6.875C6.51033 31.625 6.16059 31.7699 5.90273 32.0277C5.64487 32.2856 5.5 32.6353 5.5 33C5.5 33.3647 5.64487 33.7144 5.90273 33.9723C6.16059 34.2301 6.51033 34.375 6.875 34.375H37.125C37.4897 34.375 37.8394 34.2301 38.0973 33.9723C38.3551 33.7144 38.5 33.3647 38.5 33C38.5 32.6353 38.3551 32.2856 38.0973 32.0277C37.8394 31.7699 37.4897 31.625 37.125 31.625Z" fill="black"/>
+        </svg>
+      </button>
+    </section>
+
+    <!-- ========== TOP-RIGHT FUNNEL ========== -->
+    <section class="rail rail-funnel" aria-label="Filter">
+      <button class="tile" aria-label="Filter">
+        <svg viewBox="0 0 44 44" fill="none" aria-hidden="true">
+          <path d="M6 9 h32 l-12 15 v11 l-8 4 v-15 Z" stroke="#111" stroke-width="2.8" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </section>
+
+    <!-- ========== RADAR LEADER CONNECTORS ========== -->
+    <svg id="leaders" viewBox="0 0 1920 1200" aria-hidden="true">
+      <g id="lead-srk">
+        <line x1="451" y1="477" x2="411" y2="477" stroke="#ffffff" stroke-opacity="0.85" stroke-width="2"/>
+        <circle cx="411" cy="477" r="3.5" fill="#fff"/>
+      </g>
+      <g id="lead-isr">
+        <line x1="619" y1="645" x2="619" y2="700" stroke="#ffffff" stroke-opacity="0.85" stroke-width="2"/>
+        <circle cx="619" cy="700" r="3.5" fill="#fff"/>
+      </g>
+    </svg>
+
+    <!-- ========== BLIPS + BADGES ========== -->
+    <button class="marker" id="srk" aria-label="SRK drone">
+      <span class="badge">SRK</span>
+      <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M61.9981 21.7509C61.2981 22.4509 57.6981 19.8509 53.7981 15.9009L44.8481 27.2009V35.6009H44.7981V36.0009L53.7981 47.3509C57.6981 43.4009 61.2981 40.8009 61.9981 41.5009C62.7481 42.2009 60.0981 46.1509 56.0981 50.3509C56.0981 50.7009 56.0481 52.1509 54.4481 52.0509C50.9981 55.4009 47.8981 57.5009 47.2481 56.8509C46.5981 56.2509 48.3981 53.3009 51.3981 49.9009L41.3981 41.9009H31.7981H22.1481L12.4481 49.6509C15.5481 53.1509 17.4481 56.2009 16.7981 56.8009C16.1481 57.4509 13.0481 55.3009 9.54809 51.9009C7.39809 52.3509 7.54809 50.2009 7.54809 50.2009L7.69809 50.0009C3.79809 45.9509 1.29809 42.1509 1.99809 41.4509C2.69809 40.7509 6.19809 43.2509 9.99809 47.1009L18.7981 36.0009V35.6009H18.7481V27.2009L9.99809 16.1509C6.19809 19.9509 2.69809 22.4509 1.99809 21.7509C1.29809 21.0509 3.74809 17.2509 7.59809 13.2009L7.34809 12.9009C7.34809 12.9009 7.19809 10.7009 9.44809 11.2009L9.49809 11.2509C12.9981 7.85094 16.0481 5.75094 16.6981 6.40094C17.3481 7.00094 15.4481 10.0509 12.3481 13.5509L22.0481 21.3009H31.7481H41.4481L51.3981 13.3509C48.3981 9.90094 46.5981 7.00094 47.2481 6.40094C47.8981 5.80094 50.9481 7.85094 54.3481 11.1509C56.2981 10.8509 56.1981 12.9009 56.1981 12.9009L56.1481 12.9509C60.0981 17.1509 62.6981 21.0509 61.9981 21.7509ZM38.9481 27.2009L31.7981 23.4009L24.6481 27.2009V27.6009H24.6981V36.0009L31.7981 39.8009L38.8981 36.0009V27.6009H38.9481V27.2009Z" fill="white"/></svg>
+    </button>
+
+    <button class="marker" id="isr" aria-label="ISR drone">
+      <span class="badge">ISR</span>
+      <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M61.9981 21.7509C61.2981 22.4509 57.6981 19.8509 53.7981 15.9009L44.8481 27.2009V35.6009H44.7981V36.0009L53.7981 47.3509C57.6981 43.4009 61.2981 40.8009 61.9981 41.5009C62.7481 42.2009 60.0981 46.1509 56.0981 50.3509C56.0981 50.7009 56.0481 52.1509 54.4481 52.0509C50.9981 55.4009 47.8981 57.5009 47.2481 56.8509C46.5981 56.2509 48.3981 53.3009 51.3981 49.9009L41.3981 41.9009H31.7981H22.1481L12.4481 49.6509C15.5481 53.1509 17.4481 56.2009 16.7981 56.8009C16.1481 57.4509 13.0481 55.3009 9.54809 51.9009C7.39809 52.3509 7.54809 50.2009 7.54809 50.2009L7.69809 50.0009C3.79809 45.9509 1.29809 42.1509 1.99809 41.4509C2.69809 40.7509 6.19809 43.2509 9.99809 47.1009L18.7981 36.0009V35.6009H18.7481V27.2009L9.99809 16.1509C6.19809 19.9509 2.69809 22.4509 1.99809 21.7509C1.29809 21.0509 3.74809 17.2509 7.59809 13.2009L7.34809 12.9009C7.34809 12.9009 7.19809 10.7009 9.44809 11.2009L9.49809 11.2509C12.9981 7.85094 16.0481 5.75094 16.6981 6.40094C17.3481 7.00094 15.4481 10.0509 12.3481 13.5509L22.0481 21.3009H31.7481H41.4481L51.3981 13.3509C48.3981 9.90094 46.5981 7.00094 47.2481 6.40094C47.8981 5.80094 50.9481 7.85094 54.3481 11.1509C56.2981 10.8509 56.1981 12.9009 56.1981 12.9009L56.1481 12.9509C60.0981 17.1509 62.6981 21.0509 61.9981 21.7509ZM38.9481 27.2009L31.7981 23.4009L24.6481 27.2009V27.6009H24.6981V36.0009L31.7981 39.8009L38.8981 36.0009V27.6009H38.9481V27.2009Z" fill="white"/></svg>
+    </button>
+
+    <!-- ========== DATA BLOCKS ========== -->
+    <div class="card" id="card-strike" tabindex="0" role="button" aria-label="Strike Gambit, battery 98 percent, signal good">
+      <div class="name">Strike Gambit</div>
+      <div class="meta">
+        <span class="stat">
+          <svg class="cap" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <rect x="11" y="6" width="18" height="30" rx="2.5" stroke="#fff" stroke-width="2.4"/>
+            <rect x="16" y="2.5" width="8" height="4" rx="1.2" fill="#fff"/>
+            <rect x="13.5" y="9" width="13" height="24.5" rx="1" fill="#fff"/>
+          </svg>
+          <span class="val">98%</span>
+        </span>
+        <span class="stat">
+          <svg class="sig" width="32" height="40" viewBox="0 0 32 40" fill="none" aria-hidden="true">
+            <g fill="#fff"><rect x="1" y="27" width="5" height="11" rx="1"/><rect x="10" y="20" width="5" height="18" rx="1"/>
+            <rect x="19" y="27" width="5" height="11" rx="1" fill-opacity="0.35"/><rect x="27" y="22" width="5" height="16" rx="1" fill-opacity="0.35"/></g>
+          </svg>
+          <span class="val">Good</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="card" id="card-isr" tabindex="0" role="button" aria-label="ISR Gambit, battery 98 percent, signal good">
+      <div class="name">ISR Gambit</div>
+      <div class="meta">
+        <span class="stat">
+          <svg class="cap" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <rect x="11" y="6" width="18" height="30" rx="2.5" stroke="#fff" stroke-width="2.4"/>
+            <rect x="16" y="2.5" width="8" height="4" rx="1.2" fill="#fff"/>
+            <rect x="13.5" y="9" width="13" height="24.5" rx="1" fill="#fff"/>
+          </svg>
+          <span class="val">98%</span>
+        </span>
+        <span class="stat">
+          <svg class="sig" width="32" height="40" viewBox="0 0 32 40" fill="none" aria-hidden="true">
+            <g fill="#fff"><rect x="1" y="27" width="5" height="11" rx="1"/><rect x="10" y="20" width="5" height="18" rx="1"/>
+            <rect x="19" y="27" width="5" height="11" rx="1" fill-opacity="0.35"/><rect x="27" y="22" width="5" height="16" rx="1" fill-opacity="0.35"/></g>
+          </svg>
+          <span class="val">Good</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- ===== LONG-PRESS RADIAL MENU (hidden until a drone is long-pressed) ===== -->
+    <div id="radial-scrim"></div>
+    <div class="radial" id="radial" role="menu" aria-label="Drone actions" aria-hidden="true">
+      <!-- MAIN PAGE -->
+      <button class="wedge left page-main" id="opt-intent" role="menuitem" aria-haspopup="true">
+        <span class="in">
+          <svg viewBox="0 0 44 44" fill="none">
+            <circle cx="22" cy="22" r="13" stroke-width="3"/>
+            <circle cx="22" cy="22" r="3.2" fill="currentColor" stroke="none"/>
+            <line x1="22" y1="2" x2="22" y2="11" stroke-width="3"/>
+            <line x1="22" y1="33" x2="22" y2="42" stroke-width="3"/>
+            <line x1="2" y1="22" x2="11" y2="22" stroke-width="3"/>
+            <line x1="33" y1="22" x2="42" y2="22" stroke-width="3"/>
+          </svg>
+          <span class="lb">Intent</span>
+        </span>
+      </button>
+      <button class="wedge right page-main" id="opt-plan" role="menuitem">
+        <span class="in">
+          <svg viewBox="0 0 44 44" fill="none">
+            <line x1="12" y1="4" x2="12" y2="41" stroke-width="3"/>
+            <path d="M12 6 H35 L28 13.5 L35 21 H12 Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          <span class="lb">Plan</span>
+        </span>
+      </button>
+      <button class="center page-main" id="opt-exit" role="menuitem" aria-label="Exit menu">
+        <svg viewBox="0 0 44 44" fill="none">
+          <line x1="11" y1="11" x2="33" y2="33" stroke-width="4" stroke-linecap="round"/>
+          <line x1="33" y1="11" x2="11" y2="33" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+        <span class="lb">Exit</span>
+      </button>
+
+      <!-- SUBMENU A — before a takeoff point is placed -->
+      <button class="wedge full page-takeoff" id="opt-takeoff" role="menuitem">
+        <span class="in">
+          <svg viewBox="0 0 44 44" fill="none">
+            <path d="M6 30 C16 26 27 21 39 12 M33 10 L39 11 L38 17" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="5" y1="37" x2="34" y2="37" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          <span class="lb">Takeoff</span>
+        </span>
+      </button>
+
+      <!-- SUBMENU B — after a takeoff point is placed (four quarter-disc actions) -->
+      <button class="qbtn tl page-expanded" id="opt-dest" role="menuitem">
+        <span class="in">
+        <svg viewBox="0 0 44 44" fill="none"><path d="M38.6727 24.8883L24.9227 38.6383C23.307 40.2539 20.7289 40.2539 19.1133 38.6383L5.32891 24.8883C3.71328 23.2727 3.71328 20.6945 5.32891 19.0789L19.1133 5.32891C20.7289 3.71328 23.307 3.71328 24.9227 5.32891L38.6727 19.0789C40.2883 20.6945 40.2883 23.2727 38.6727 24.8883ZM24.5445 10.5539H19.457V14.1633L20.0414 25.4383H23.9945L24.5789 14.1633V10.5539H24.5445ZM24.5445 28.3258H19.457V33.5164H24.5445V28.3258Z" fill="currentColor"/></svg>
+        <span class="lb">Destination<br>point</span>
+        </span>
+      </button>
+      <button class="qbtn tr page-expanded" id="opt-orbit" role="menuitem">
+        <span class="in">
+        <svg viewBox="0 0 44 44" fill="none"><path d="M35 16A15 15 0 1 0 37.5 25" stroke-width="3" stroke-linecap="round"/><path d="M29 6 L37 14 L28.5 17.5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="lb">Orbit/hold</span>
+        </span>
+      </button>
+      <button class="qbtn bl page-expanded" id="opt-follow" role="menuitem">
+        <span class="in">
+        <svg viewBox="0 0 44 44" fill="none"><path d="M22 30.8684C11.55 30.8684 3.09375 21.9996 3.09375 21.9996C3.09375 21.9996 11.55 13.1309 22 13.1309C32.45 13.1309 40.9062 21.9996 40.9062 21.9996C40.9062 21.9996 32.45 30.8684 22 30.8684ZM22 15.6746C18.2875 15.6746 15.2625 18.6652 15.2625 22.309C15.2625 25.9527 18.2875 28.9434 22 28.9434C25.7125 28.9434 28.7375 25.9527 28.7375 22.309C28.7375 18.6652 25.7125 15.6746 22 15.6746Z" fill="currentColor"/></svg>
+        <span class="lb">Follow</span>
+        </span>
+      </button>
+      <button class="qbtn br page-expanded" id="opt-waypoint" role="menuitem">
+        <span class="in">
+        <svg viewBox="0 0 44 44" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M41.9031 18.975L25.4719 2.54375C23.6844 0.75625 20.7625 0.75625 18.975 2.54375L2.54375 18.975C0.75625 20.7625 0.75625 23.6844 2.54375 25.4719L18.975 41.9031C20.7625 43.6906 23.6844 43.6906 25.4719 41.9031L41.9031 25.4719C43.6906 23.6844 43.6906 20.7625 41.9031 18.975ZM22.2406 33.7219C15.8812 33.7219 10.725 28.5656 10.725 22.2062C10.725 15.8469 15.8812 10.6906 22.2406 10.6906C28.6 10.6906 33.7562 15.8469 33.7562 22.2062C33.7562 28.5656 28.6 33.7219 22.2406 33.7219ZM22.5844 13.9906C17.8406 13.9906 14.025 17.8406 14.025 22.55C14.025 27.2594 17.7375 30.5594 22.3094 30.5594C26.8813 30.5594 30.5938 26.8469 30.5938 22.275C30.5938 17.7031 27.2937 13.9906 22.5844 13.9906Z" fill="currentColor"/></svg>
+        <span class="lb">Waypoint</span>
+        </span>
+      </button>
+
+      <!-- shared submenu chrome -->
+      <span class="level">INTENT</span>
+      <button class="center page-sub" id="opt-back" role="menuitem" aria-label="Back to actions">
+        <svg viewBox="0 0 44 44" fill="none">
+          <path d="M25 9 L13 22 L25 35 M13 22 H36" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="lb">Back</span>
+      </button>
+    </div>
+    <div id="lp-ring"></div>
+
+    <!-- takeoff task marker: appears on the map beside the selected drone while the drawer is open -->
+    <div id="tk-marker" aria-hidden="true">
+      <svg viewBox="0 0 44 44" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M1.82031 35.4062V40.1156H43.9984V35.4062H1.82031ZM40.3891 13.0281C44.1359 6.97813 36.3328 6.84062 36.3328 6.84062L23.1328 15.4688L3.84844 5.32812L2.64531 11.1375L15.1922 20.625L8.14531 25.2313L1.13281 22.2406L-0.0703125 28.0844L7.52656 31.9688L40.3891 13.0625V13.0281Z" fill="#000"/></svg>
+    </div>
+
+    <!-- loiter/orbit circle: shown on the map while the Loiter form is open; radius + turns update live -->
+    <div id="lo-circle" aria-hidden="true">
+      <svg class="ring" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="49" fill="none" stroke="#fff" stroke-opacity=".9" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+        <path d="M56 1.5 l8.5 3.5 l-3.5 8.5" fill="none" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M44 98.5 l-8.5 -3.5 l3.5 -8.5" fill="none" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="lc-ic"><svg viewBox="0 0 44 44" fill="none"><path d="M35 16A15 15 0 1 0 37.5 25" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M29 6 L37 14 L28.5 17.5" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="lc-turns">0 Turns</span>
+    </div>
+    <!-- arrow from the takeoff point (icon 1) to the orbit intent (icon 2) -->
+    <svg id="lo-arrow" viewBox="0 0 1920 1200" aria-hidden="true">
+      <line id="lo-arrow-line" stroke="#fff" stroke-width="3" stroke-opacity=".95" stroke-linecap="round"/>
+      <polygon id="lo-arrow-head" fill="#fff"/>
+    </svg>
+
+    <!-- ===== TAKEOFF TASK PROPERTIES DRAWER ===== -->
+    <section id="takeoff" role="dialog" aria-modal="true" aria-label="Takeoff Task Properties" aria-hidden="true">
+      <h2 class="tk-title">Takeoff Task Properties</h2>
+      <button class="tk-close" id="tk-close" aria-label="Close">
+        <svg viewBox="0 0 44 44" fill="none"><line x1="11" y1="11" x2="33" y2="33" stroke-width="4" stroke-linecap="round"/><line x1="33" y1="11" x2="11" y2="33" stroke-width="4" stroke-linecap="round"/></svg>
+      </button>
+
+      <div class="tk-body">
+        <!-- Transition Altitude AGL -->
+        <div class="tk-field" data-min="0" data-max="500" data-step="1" data-unit="m" data-name="transition altitude" data-maxlen="3">
+          <span class="lbl">Transition Altitude AGL</span>
+          <div class="stepper">
+            <button class="step dec"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/></svg></button>
+            <div class="valwrap"><input class="num" inputmode="numeric" maxlength="3" value="25"><span class="unit">m</span></div>
+            <button class="step inc"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/><line x1="22" y1="9" x2="22" y2="35" stroke-width="4" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="hint">Range 0–500 m · step 1 · type or hold ±</div>
+          <div class="err"><svg viewBox="0 0 26 26" fill="none"><path d="M13 3 L24 22 H2 Z" stroke-width="2" stroke-linejoin="round"/><line x1="13" y1="10" x2="13" y2="16" stroke-width="2" stroke-linecap="round"/><circle cx="13" cy="19.5" r="1.2" fill="#fff" stroke="none"/></svg><span class="err-msg"></span></div>
+        </div>
+
+        <!-- Transition Distance -->
+        <div class="tk-field" data-min="0" data-max="2000" data-step="5" data-unit="m" data-name="transition distance" data-maxlen="4">
+          <span class="lbl">Transition Distance</span>
+          <div class="stepper">
+            <button class="step dec"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/></svg></button>
+            <div class="valwrap"><input class="num" inputmode="numeric" maxlength="4" value="200"><span class="unit">m</span></div>
+            <button class="step inc"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/><line x1="22" y1="9" x2="22" y2="35" stroke-width="4" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="hint">Range 0–2000 m · step 5 · type or hold ±</div>
+          <div class="err"><svg viewBox="0 0 26 26" fill="none"><path d="M13 3 L24 22 H2 Z" stroke-width="2" stroke-linejoin="round"/><line x1="13" y1="10" x2="13" y2="16" stroke-width="2" stroke-linecap="round"/><circle cx="13" cy="19.5" r="1.2" fill="#fff" stroke="none"/></svg><span class="err-msg"></span></div>
+        </div>
+
+        <!-- Climbout Heading -->
+        <div class="tk-field" data-min="0" data-max="359" data-step="1" data-unit="°" data-wrap="1" data-name="climbout heading" data-maxlen="3">
+          <span class="lbl">Climbout Heading</span>
+          <div class="stepper">
+            <button class="step dec"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/></svg></button>
+            <div class="valwrap"><input class="num" inputmode="numeric" maxlength="3" value="0"><span class="unit">°</span></div>
+            <button class="step inc"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/><line x1="22" y1="9" x2="22" y2="35" stroke-width="4" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="hint">Range 0–359° · wraps · step 1 · type or hold ±</div>
+          <div class="err"><svg viewBox="0 0 26 26" fill="none"><path d="M13 3 L24 22 H2 Z" stroke-width="2" stroke-linejoin="round"/><line x1="13" y1="10" x2="13" y2="16" stroke-width="2" stroke-linecap="round"/><circle cx="13" cy="19.5" r="1.2" fill="#fff" stroke="none"/></svg><span class="err-msg"></span></div>
+        </div>
+
+        <button class="tk-btn" id="tk-center">
+          <svg viewBox="0 0 44 44" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M4.88125 4.91563H19.5938V0H0V19.6281H4.91563V4.91563H4.88125ZM39.2219 0H24.5094V4.91563H39.2219V19.6281H44.1375V0H39.2219ZM39.2219 39.2562H24.5094V44.1719H44.1375V24.5438H39.2219V39.2562ZM4.88125 24.5438H0V44.1719H19.6281V39.2562H4.88125V24.5438ZM34.3063 22.0687C34.3063 15.2969 28.8062 9.79688 22.0344 9.79688C15.2625 9.79688 9.7625 15.2969 9.7625 22.0687C9.7625 28.8406 15.2625 34.3406 22.0344 34.3406C28.8062 34.3406 34.3063 28.8406 34.3063 22.0687ZM22.0344 29.425C17.9781 29.425 14.6781 26.125 14.6781 22.0687C14.6781 18.0125 17.9781 14.7125 22.0344 14.7125C26.0906 14.7125 29.3906 18.0125 29.3906 22.0687C29.3906 26.125 26.0906 29.425 22.0344 29.425Z" fill="#fff"/></svg>
+          Center on Map
+        </button>
+        <hr class="tk-sep">
+        <button class="tk-btn" id="tk-delete">
+          <svg viewBox="0 0 44 44" fill="none"><path d="M34.0957 35.5237C34.1452 38.4277 31.8297 40.7872 28.9257 40.7872H15.2417C12.3377 40.7872 9.93966 38.4332 9.88466 35.5237L5.16016 6.05469H38.8422L34.0957 35.5237ZM15.5772 13.4907C15.4947 12.3027 14.4277 11.3182 13.2012 11.3182C11.9747 11.3182 11.0947 12.3027 11.2377 13.4907L13.9987 36.4917C14.0757 37.1242 14.8402 37.6302 15.7147 37.6302C16.5892 37.6302 17.2602 37.1242 17.2107 36.4917L15.5772 13.4907ZM22.0947 11.3182C20.8682 11.3182 19.8947 12.3027 19.9167 13.4907L20.4227 36.4917C20.4392 37.1242 21.1542 37.6302 22.0287 37.6302C22.9032 37.6302 23.6237 37.1242 23.6402 36.4917L24.2617 13.4907C24.2947 12.3027 23.3267 11.3182 22.0947 11.3182ZM30.9882 11.3182C29.7617 11.3182 28.6892 12.3027 28.6012 13.4907L26.8522 36.4917C26.8027 37.1242 27.4737 37.6302 28.3427 37.6302C29.2117 37.6302 29.9872 37.1242 30.0642 36.4917L32.9407 13.4907C33.0892 12.3027 32.2147 11.3182 30.9882 11.3182Z" fill="#fff"/></svg>
+          <span class="tk-delete-lbl">Delete Intent</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ===== LOITER (Orbit/hold) TASK PROPERTIES DRAWER ===== -->
+    <section id="loiter" role="dialog" aria-modal="true" aria-label="Loiter Task Properties" aria-hidden="true">
+      <h2 class="tk-title">Loiter Task Properties</h2>
+      <button class="tk-close" id="lo-close" aria-label="Close">
+        <svg viewBox="0 0 44 44" fill="none"><line x1="11" y1="11" x2="33" y2="33" stroke-width="4" stroke-linecap="round"/><line x1="33" y1="11" x2="11" y2="33" stroke-width="4" stroke-linecap="round"/></svg>
+      </button>
+
+      <div class="tk-body">
+        <!-- Coordinate (read-only, derived from the placed point) -->
+        <div class="lo-field">
+          <span class="lbl">Coordinate</span>
+          <div class="lo-row">
+            <div class="lo-ro"><span class="v">50.215524</span><span class="u">lat</span></div>
+            <div class="lo-ro"><span class="v">10.325790</span><span class="u">lon</span></div>
+          </div>
+        </div>
+
+        <!-- Loiter Type (dropdown) -->
+        <div class="lo-field">
+          <span class="lbl">Loiter Type</span>
+          <div class="lo-select">
+            <select id="lo-type" aria-label="Loiter type">
+              <option>Orbit on Target</option>
+              <option>Circle</option>
+              <option>Racetrack</option>
+              <option>Hover in place</option>
+            </select>
+            <span class="caret"><svg viewBox="0 0 44 44" fill="none"><path d="M12 17 L22 27 L32 17" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </div>
+        </div>
+
+        <!-- Number of turns -->
+        <div class="tk-field" data-min="0" data-max="999" data-step="1" data-unit="" data-name="number of turns" data-maxlen="3">
+          <span class="lbl">Number of turns</span>
+          <div class="stepper">
+            <button class="step dec"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/></svg></button>
+            <div class="valwrap"><input class="num" id="lo-turns-input" inputmode="numeric" maxlength="3" value="0"><span class="unit"></span></div>
+            <button class="step inc"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/><line x1="22" y1="9" x2="22" y2="35" stroke-width="4" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="hint">0 = loiter indefinitely · step 1 · type or hold ±</div>
+          <div class="err"><svg viewBox="0 0 26 26" fill="none"><path d="M13 3 L24 22 H2 Z" stroke-width="2" stroke-linejoin="round"/><line x1="13" y1="10" x2="13" y2="16" stroke-width="2" stroke-linecap="round"/><circle cx="13" cy="19.5" r="1.2" fill="#fff" stroke="none"/></svg><span class="err-msg"></span></div>
+        </div>
+
+        <!-- Radius -->
+        <div class="tk-field" data-min="10" data-max="5000" data-step="10" data-unit="m" data-name="radius" data-maxlen="4">
+          <span class="lbl">Radius</span>
+          <div class="stepper">
+            <button class="step dec"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/></svg></button>
+            <div class="valwrap"><input class="num" id="lo-radius-input" inputmode="numeric" maxlength="4" value="200"><span class="unit">m</span></div>
+            <button class="step inc"><svg viewBox="0 0 44 44" fill="none"><line x1="9" y1="22" x2="35" y2="22" stroke-width="4" stroke-linecap="round"/><line x1="22" y1="9" x2="22" y2="35" stroke-width="4" stroke-linecap="round"/></svg></button>
+          </div>
+          <div class="hint">Range 10–5000 m · step 10 · type or hold ±</div>
+          <div class="err"><svg viewBox="0 0 26 26" fill="none"><path d="M13 3 L24 22 H2 Z" stroke-width="2" stroke-linejoin="round"/><line x1="13" y1="10" x2="13" y2="16" stroke-width="2" stroke-linecap="round"/><circle cx="13" cy="19.5" r="1.2" fill="#fff" stroke="none"/></svg><span class="err-msg"></span></div>
+        </div>
+
+        <!-- read-only readouts -->
+        <div class="lo-readouts">
+          <div class="lo-readout"><div class="k">Altitude MSL</div><div class="rv">569 m</div></div>
+          <div class="lo-readout"><div class="k">Ground Elevation</div><div class="rv">369 m</div></div>
+        </div>
+
+        <!-- boolean options as toggle switches -->
+        <div class="lo-toggle-row">
+          <span class="lbl" id="lbl-align">Leave Once Aligned</span>
+          <button class="lo-toggle" role="switch" aria-checked="false" aria-labelledby="lbl-align"></button>
+        </div>
+        <div class="lo-toggle-row">
+          <span class="lbl" id="lbl-cw">Clockwise</span>
+          <button class="lo-toggle" role="switch" aria-checked="true" aria-labelledby="lbl-cw"></button>
+        </div>
+
+        <button class="tk-btn" id="lo-center">
+          <svg viewBox="0 0 44 44" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M4.88125 4.91563H19.5938V0H0V19.6281H4.91563V4.91563H4.88125ZM39.2219 0H24.5094V4.91563H39.2219V19.6281H44.1375V0H39.2219ZM39.2219 39.2562H24.5094V44.1719H44.1375V24.5438H39.2219V39.2562ZM4.88125 24.5438H0V44.1719H19.6281V39.2562H4.88125V24.5438ZM34.3063 22.0687C34.3063 15.2969 28.8062 9.79688 22.0344 9.79688C15.2625 9.79688 9.7625 15.2969 9.7625 22.0687C9.7625 28.8406 15.2625 34.3406 22.0344 34.3406C28.8062 34.3406 34.3063 28.8406 34.3063 22.0687ZM22.0344 29.425C17.9781 29.425 14.6781 26.125 14.6781 22.0687C14.6781 18.0125 17.9781 14.7125 22.0344 14.7125C26.0906 14.7125 29.3906 18.0125 29.3906 22.0687C29.3906 26.125 26.0906 29.425 22.0344 29.425Z" fill="#fff"/></svg>
+          Center on Map
+        </button>
+        <hr class="tk-sep">
+        <button class="tk-btn" id="lo-delete">
+          <svg viewBox="0 0 44 44" fill="none"><path d="M34.0957 35.5237C34.1452 38.4277 31.8297 40.7872 28.9257 40.7872H15.2417C12.3377 40.7872 9.93966 38.4332 9.88466 35.5237L5.16016 6.05469H38.8422L34.0957 35.5237ZM15.5772 13.4907C15.4947 12.3027 14.4277 11.3182 13.2012 11.3182C11.9747 11.3182 11.0947 12.3027 11.2377 13.4907L13.9987 36.4917C14.0757 37.1242 14.8402 37.6302 15.7147 37.6302C16.5892 37.6302 17.2602 37.1242 17.2107 36.4917L15.5772 13.4907ZM22.0947 11.3182C20.8682 11.3182 19.8947 12.3027 19.9167 13.4907L20.4227 36.4917C20.4392 37.1242 21.1542 37.6302 22.0287 37.6302C22.9032 37.6302 23.6237 37.1242 23.6402 36.4917L24.2617 13.4907C24.2947 12.3027 23.3267 11.3182 22.0947 11.3182ZM30.9882 11.3182C29.7617 11.3182 28.6892 12.3027 28.6012 13.4907L26.8522 36.4917C26.8027 37.1242 27.4737 37.6302 28.3427 37.6302C29.2117 37.6302 29.9872 37.1242 30.0642 36.4917L32.9407 13.4907C33.0892 12.3027 32.2147 11.3182 30.9882 11.3182Z" fill="#fff"/></svg>
+          Delete Intent
+        </button>
+      </div>
+    </section>
+
+    <div id="flash"></div>
+  </main>
+</div>
+<script>
+  const $=id=>document.getElementById(id);
+  const stage=$('stage');
+  function fit(){
+    const s=Math.min(innerWidth/1920, innerHeight/1200);
+    const tx=(innerWidth-1920*s)/2, ty=(innerHeight-1200*s)/2;
+    stage.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')';
+  }
+  addEventListener('resize',fit); addEventListener('load',fit); fit();
+
+  // UX 1 — link each blip to its data block (hover / focus highlights both + the leader)
+  const pairs=[{m:'srk',c:'card-strike',l:'lead-srk',cx:507,cy:477},{m:'isr',c:'card-isr',l:'lead-isr',cx:619,cy:589}];
+  const set=(p,cls,on)=>[p.m,p.c,p.l].forEach(id=>$(id).classList.toggle(cls,on));
+  const select=p=>pairs.forEach(q=>set(q,'sel',q===p));
+  pairs.forEach(p=>{
+    [$(p.m),$(p.c)].forEach(el=>{
+      el.addEventListener('mouseenter',()=>set(p,'hl',true));
+      el.addEventListener('mouseleave',()=>set(p,'hl',false));
+      el.addEventListener('focus',()=>set(p,'hl',true));
+      el.addEventListener('blur',()=>set(p,'hl',false));
+      el.addEventListener('click',e=>{e.stopPropagation();select(p);});
+      el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(p);}});
+    });
+  });
+  // UX 5 — click empty map to clear the current selection
+  stage.addEventListener('click',()=>pairs.forEach(q=>set(q,'sel',false)));
+
+  // UX 4 — screenshot capture flash
+  const shot=$('btn-shot'), flash=$('flash');
+  shot.addEventListener('click',e=>{e.stopPropagation();flash.classList.remove('go');void flash.offsetWidth;flash.classList.add('go');});
+
+  // Long-press a drone → radial action menu (hybrid UX). Figma 783:12720 / 12798
+  const radial=$('radial'), scrim=$('radial-scrim'), ring=$('lp-ring'), HOLD=500;
+  function placeMenu(p){
+    let cx=p.cx, cy=p.cy+300;                                   // dock below the drone…
+    cx=Math.max(230,Math.min(1920-230,cx));                     // …then clamp/flip to stay on-screen
+    cy=Math.max(60+230,Math.min(1200-230,cy));
+    radial.style.left=(cx-230)+'px'; radial.style.top=(cy-230)+'px';
+  }
+  let activePair=null, takeoffPlaced=false, loiterPlaced=false;
+  function openMenu(p){
+    activePair=p;
+    placeMenu(p); pairs.forEach(q=>set(q,'sel',q===p));
+    radial.classList.remove('plan'); radial.classList.add('on'); radial.setAttribute('aria-hidden','false');
+    scrim.classList.add('on'); stage.classList.add('menu-open');
+    requestAnimationFrame(()=>$('opt-intent').focus());
+  }
+  function closeMenu(){ radial.classList.remove('on','plan','expanded'); radial.setAttribute('aria-hidden','true');
+    scrim.classList.remove('on'); stage.classList.remove('menu-open'); }
+  function toPlan(){ radial.classList.add('plan'); radial.classList.toggle('expanded', takeoffPlaced);
+    requestAnimationFrame(()=>{ (takeoffPlaced ? $('opt-dest') : $('opt-takeoff')).focus(); }); }
+  function toMain(){ radial.classList.remove('plan','expanded'); requestAnimationFrame(()=>$('opt-intent').focus()); }
+
+  // long-press with a visible progress ring on the drone (fills over HOLD, cancels on release)
+  pairs.forEach(p=>{
+    const m=$(p.m); let raf=null, t0=0, active=false;
+    const begin=()=>{ active=true; t0=performance.now();
+      ring.style.left=(p.cx-66)+'px'; ring.style.top=(p.cy-66)+'px'; ring.style.setProperty('--p',0);
+      const step=()=>{ if(!active) return; const t=Math.min(1,(performance.now()-t0)/HOLD);
+        ring.style.setProperty('--p', t*360);
+        if(t>0.12) ring.classList.add('on');                    // don't flash on quick taps
+        if(t<1){ raf=requestAnimationFrame(step); }
+        else { active=false; ring.classList.remove('on'); openMenu(p); } };
+      raf=requestAnimationFrame(step);
+    };
+    const cancel=()=>{ active=false; cancelAnimationFrame(raf); ring.classList.remove('on'); };
+    m.addEventListener('pointerdown',begin);
+    ['pointerup','pointerleave','pointercancel'].forEach(ev=>m.addEventListener(ev,cancel));
+    m.addEventListener('contextmenu',e=>e.preventDefault());
+  });
+  $('opt-intent').addEventListener('click',e=>{e.stopPropagation();toPlan();});   // Intent → Takeoff submenu
+  $('opt-back').addEventListener('click',e=>{e.stopPropagation();toMain();});
+  ['opt-plan','opt-exit'].forEach(id=>$(id).addEventListener('click',e=>{e.stopPropagation();closeMenu();}));
+  $('opt-takeoff').addEventListener('click',e=>{e.stopPropagation();closeMenu();openTakeoff();});
+  ['opt-dest','opt-follow','opt-waypoint'].forEach(id=>$(id).addEventListener('click',e=>{e.stopPropagation();closeMenu();}));
+  $('opt-orbit').addEventListener('click',e=>{e.stopPropagation();closeMenu();openLoiter();});   // Orbit → Loiter form
+  radial.addEventListener('click',e=>e.stopPropagation());
+  scrim.addEventListener('click',closeMenu);
+  stage.addEventListener('click',closeMenu);
+  // keyboard: arrows move focus around the ring, Enter/Space activate (native), Esc = back/close
+  radial.addEventListener('keydown',e=>{
+    const items = !radial.classList.contains('plan') ? [$('opt-intent'),$('opt-plan'),$('opt-exit')]
+      : radial.classList.contains('expanded') ? [$('opt-dest'),$('opt-orbit'),$('opt-follow'),$('opt-waypoint'),$('opt-back')]
+      : [$('opt-takeoff'),$('opt-back')];
+    let i=items.indexOf(document.activeElement);
+    if(['ArrowRight','ArrowDown'].includes(e.key)){ e.preventDefault(); items[((i<0?0:i)+1)%items.length].focus(); }
+    else if(['ArrowLeft','ArrowUp'].includes(e.key)){ e.preventDefault(); items[((i<0?0:i)-1+items.length)%items.length].focus(); }
+    else if(e.key==='Escape'){ e.preventDefault(); radial.classList.contains('plan') ? toMain() : closeMenu(); }
+  });
+
+  // ===== Takeoff Task Properties drawer =====
+  const takeoff=$('takeoff');
+  function openTakeoff(){ takeoff.classList.add('on'); takeoff.setAttribute('aria-hidden','false');
+    stage.classList.add('takeoff-open');
+    if(activePair){ const mk=$('tk-marker'); mk.style.left=(activePair.cx+94-32)+'px'; mk.style.top=(activePair.cy-8-32)+'px'; mk.classList.add('on'); }
+    requestAnimationFrame(()=>$('tk-close').focus()); }
+  function closeTakeoff(){ takeoff.classList.remove('on'); takeoff.setAttribute('aria-hidden','true');
+    stage.classList.remove('takeoff-open'); if(!takeoffPlaced)$('tk-marker').classList.remove('on'); resetDelete(); }
+  // closing with X also keeps the placed takeoff icon on the map (only Delete removes it)
+  $('tk-close').addEventListener('click',()=>{ takeoffPlaced=true; closeTakeoff(); });
+  $('tk-center').addEventListener('click',()=>{ takeoffPlaced=true; closeTakeoff(); });
+  takeoff.addEventListener('keydown',e=>{ if(e.key==='Escape'){ e.preventDefault(); takeoffPlaced=true; closeTakeoff(); } });
+
+  // ===== Loiter (Orbit/hold) drawer =====
+  const loiter=$('loiter');
+  function openLoiter(){ loiter.classList.add('on'); loiter.setAttribute('aria-hidden','false');
+    stage.classList.add('loiter-open');
+    if(activePair){ const mk=$('tk-marker'); mk.style.left=(activePair.cx+94-32)+'px'; mk.style.top=(activePair.cy-8-32)+'px'; }
+    $('tk-marker').classList.add('on'); $('lo-circle').classList.add('on'); $('lo-arrow').classList.add('on');
+    updateLoiterCircle(); requestAnimationFrame(()=>$('lo-close').focus()); }
+  function closeLoiter(){ loiter.classList.remove('on'); loiter.setAttribute('aria-hidden','true');
+    stage.classList.remove('loiter-open');
+    if(!loiterPlaced){ $('lo-circle').classList.remove('on'); $('lo-arrow').classList.remove('on'); }
+    if(takeoffPlaced)$('tk-marker').classList.add('on'); }
+  function updateLoiterCircle(){
+    if(!activePair) return;
+    const c=$('lo-circle');
+    const Tx=activePair.cx+94, Ty=activePair.cy-8;      // takeoff point (icon 1)
+    const Ox=Tx+150, Oy=Ty-120;                          // orbit intent (icon 2), offset from takeoff
+    const R=Math.max(50, Math.min(300, (parseInt($('lo-radius-input').value,10)||200)*0.45));  // metres → px
+    c.style.left=(Ox-R)+'px'; c.style.top=(Oy-R)+'px'; c.style.width=(2*R)+'px'; c.style.height=(2*R)+'px';
+    const t=parseInt($('lo-turns-input').value,10)||0;
+    c.querySelector('.lc-turns').textContent = t+(t===1?' Turn':' Turns');
+    // arrow: takeoff → orbit
+    const dx=Ox-Tx, dy=Oy-Ty, L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L;
+    const sx=Tx+ux*34, sy=Ty+uy*34, ex=Ox-ux*34, ey=Oy-uy*34;
+    const ln=$('lo-arrow-line'); ln.setAttribute('x1',sx); ln.setAttribute('y1',sy); ln.setAttribute('x2',ex); ln.setAttribute('y2',ey);
+    const px=-uy, py=ux;
+    $('lo-arrow-head').setAttribute('points',
+      `${ex},${ey} ${ex-ux*18+px*9},${ey-uy*18+py*9} ${ex-ux*18-px*9},${ey-uy*18-py*9}`);
+  }
+  // X and Center on Map keep the orbit intent (icon + circle + arrow) on the map; Delete removes it
+  $('lo-close').addEventListener('click',()=>{ loiterPlaced=true; closeLoiter(); });
+  $('lo-center').addEventListener('click',()=>{ loiterPlaced=true; closeLoiter(); });
+  $('lo-delete').addEventListener('click',()=>{ loiterPlaced=false; $('lo-circle').classList.remove('on'); $('lo-arrow').classList.remove('on'); closeLoiter(); });
+  loiter.addEventListener('keydown',e=>{ if(e.key==='Escape'){ e.preventDefault(); loiterPlaced=true; closeLoiter(); } });
+  // monochrome toggle switches (role=switch)
+  document.querySelectorAll('.lo-toggle').forEach(t=>{
+    const flip=()=>t.setAttribute('aria-checked', t.getAttribute('aria-checked')==='true'?'false':'true');
+    t.addEventListener('click',flip);
+    t.addEventListener('keydown',e=>{ if(e.key===' '||e.key==='Enter'){ e.preventDefault(); flip(); } });
+  });
+
+  // reusable numeric stepper: typeable + commit/restore, validation w/ inline message,
+  // disabled limits, wrap, hold-to-repeat w/ acceleration, keyboard, a11y labels
+  document.querySelectorAll('.tk-field').forEach(f=>{
+    const min=+f.dataset.min, max=+f.dataset.max, step=+f.dataset.step, wrap=f.dataset.wrap==='1', unit=f.dataset.unit, name=f.dataset.name;
+    const span=max-min+1;
+    const input=f.querySelector('.num'), dec=f.querySelector('.dec'), inc=f.querySelector('.inc'),
+          vw=f.querySelector('.valwrap'), errMsg=f.querySelector('.err-msg');
+    const rangeTxt = `${min}–${max}${unit==='°'?'°':' '+unit}`;
+    let committed = clampWrap(parseInt(input.value,10)||min);
+
+    dec.setAttribute('aria-label','Decrease '+name);
+    inc.setAttribute('aria-label','Increase '+name);
+    input.setAttribute('role','spinbutton');
+    input.setAttribute('aria-label', name+' in '+(unit==='°'?'degrees':unit));
+    input.setAttribute('aria-valuemin',min); input.setAttribute('aria-valuemax',max);
+    input.setAttribute('enterkeyhint','done');
+
+    function clampWrap(v){ if(isNaN(v)) return min;
+      return wrap ? (((v-min)%span)+span)%span+min : Math.min(max,Math.max(min,v)); }
+    function autosize(){ input.style.width = Math.max(1, String(input.value).length) + 'ch'; }
+    function limits(){ dec.disabled=!wrap && committed<=min; inc.disabled=!wrap && committed>=max; }
+    function err(on,msg){ f.classList.toggle('has-error',on); if(on){errMsg.textContent=msg;} input.setAttribute('aria-invalid',on?'true':'false'); }
+    function render(pulse){ input.value=String(committed); input.setAttribute('aria-valuenow',committed);
+      autosize(); limits(); err(false);
+      if(pulse){ vw.classList.remove('changed'); void vw.offsetWidth; vw.classList.add('changed'); }
+      if(f.closest('#loiter')) updateLoiterCircle(); }   // live-update the map orbit circle
+
+    function commit(){                      // Enter / blur → validate typed value
+      const raw=String(input.value).trim();
+      if(!/^\d+$/.test(raw)){ err(true,'Enter a whole number, '+rangeTxt); return false; }
+      const v=parseInt(raw,10);
+      if(v<min || v>max){ err(true,'Out of range — enter '+rangeTxt); return false; }  // keep entry, don't silently replace
+      committed=v; render(true); return true;
+    }
+    function stepBy(d){ committed=clampWrap(committed+d*step); render(true); }
+
+    // ---- stepper buttons: single press + hold-to-repeat (delay, then accelerate) ----
+    [[dec,-1],[inc,1]].forEach(([btn,dir])=>{
+      let t0=null,fast=null,slow=null;
+      const stop=()=>{clearTimeout(t0);clearInterval(slow);clearInterval(fast);clearTimeout(fast);};
+      btn.addEventListener('pointerdown',e=>{ e.preventDefault(); if(btn.disabled) return; stepBy(dir);
+        t0=setTimeout(()=>{ slow=setInterval(()=>{ if(btn.disabled){stop();return;} stepBy(dir); },100);
+          fast=setTimeout(()=>{ clearInterval(slow); slow=setInterval(()=>{ if(btn.disabled){stop();return;} stepBy(dir); },45); },1000);
+        },400); });
+      ['pointerup','pointerleave','pointercancel','blur'].forEach(ev=>btn.addEventListener(ev,stop));
+    });
+
+    // ---- editing ----
+    vw.addEventListener('pointerdown',e=>{ if(e.target!==input){ e.preventDefault(); input.focus(); } }); // click value/unit → focus
+    input.addEventListener('focus',()=>input.select());                                                    // select-all to replace fast
+    input.addEventListener('input',()=>{ autosize();
+      if(f.classList.contains('has-error')){ const r=String(input.value).trim(); if(/^\d+$/.test(r)&&+r>=min&&+r<=max) err(false); } });
+    input.addEventListener('keydown',e=>{
+      if(e.key==='ArrowUp'){ e.preventDefault(); stepBy(1); input.select(); }
+      else if(e.key==='ArrowDown'){ e.preventDefault(); stepBy(-1); input.select(); }
+      else if(e.key==='Enter'){ e.preventDefault(); if(commit()) input.select(); }
+      else if(e.key==='Escape'){ e.preventDefault(); render(false); input.select(); }      // restore last committed
+    });
+    input.addEventListener('blur',()=>{ commit(); });                                        // commit (or keep error) on blur
+    input.addEventListener('wheel',e=>{ e.stopPropagation(); }, {passive:true});             // never change value on scroll
+
+    render(false);
+  });
+
+  // Delete Intent: two-step confirm (destructive-action safeguard)
+  let delArmed=false, delTimer=null;
+  const del=$('tk-delete'), delLbl=del.querySelector('.tk-delete-lbl');
+  function resetDelete(){ delArmed=false; clearTimeout(delTimer); del.classList.remove('armed'); delLbl.textContent='Delete Intent'; }
+  del.addEventListener('click',()=>{
+    if(!delArmed){ delArmed=true; del.classList.add('armed'); delLbl.textContent='Tap again to delete';
+      delTimer=setTimeout(resetDelete,3000); }
+    else { takeoffPlaced=false; $('tk-marker').classList.remove('on'); resetDelete(); closeTakeoff(); }
+  });
+</script>
+</body>
+</html>
