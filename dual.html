@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo — Dual View</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Condensed:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blue:#3dadff; --red:#ff2323; --green:#00ff66; --green2:#02f363; --panel:#121212;
+    --font:'Roboto',-apple-system,'Segoe UI',Arial,sans-serif;
+    --cond:'Roboto Condensed',var(--font);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:#000;overflow:hidden;font-family:var(--font);color:#fff;
+    touch-action:manipulation;user-select:none;-webkit-user-select:none}
+  .viewport{position:fixed;inset:0;overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center}
+  .stage{position:absolute;top:0;left:0;width:1920px;height:1200px;transform-origin:top left;background:#000;overflow:hidden}
+
+  /* ===================== SPLIT VIEW ===================== */
+  .view{position:absolute;overflow:hidden;background:#000;cursor:pointer;transition:box-shadow .12s;
+    touch-action:manipulation;outline:none}
+  .view>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+  #view-left{left:0;top:0;width:948px;height:1200px;z-index:1}
+  #view-right{left:972px;top:0;width:948px;height:1190px;z-index:1}
+  .view::after{content:"";position:absolute;inset:0;border:4px solid transparent;pointer-events:none;z-index:10}
+  .view.sel::after{border-color:var(--blue)}                 /* blue = selected view */
+
+  /* telemetry bars (split) */
+  .telem{position:absolute;top:24px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;z-index:20}
+  .telem.left{left:24px}
+  .telem.right{left:996px}
+  .ti{display:flex;flex-direction:column;align-items:center;gap:14px;padding:12px;min-height:96px;justify-content:center;
+    font-weight:700;font-size:24px;color:#fff;white-space:nowrap;line-height:1.05;text-shadow:0 1px 3px rgba(0,0,0,.9)}
+  .ti .ic{width:28px;height:28px;display:block}
+  .ti .ic svg{width:28px;height:28px;display:block}
+  .ti .wind{display:flex;gap:10px;align-items:center}
+  .ti.hi{background:#fff;color:#000;min-width:90px;text-shadow:none}
+
+  /* dark panels + white 120 buttons (shared) */
+  .panel{position:absolute;background:var(--panel);padding:24px;display:flex;flex-direction:column;z-index:25}
+  .btn{width:120px;height:120px;background:#fff;color:#000;border:none;display:flex;align-items:center;
+    justify-content:center;cursor:pointer;overflow:hidden;transition:filter .12s,transform .05s}
+  .btn:hover{filter:brightness(.9)} .btn:active{transform:scale(.97)}
+  .btn:focus-visible{outline:4px solid var(--blue);outline-offset:2px}
+  .btn .g{width:46px;height:46px;display:block}
+  .btn .lbl{font-weight:700;font-size:34px;color:#000;letter-spacing:.5px}
+
+  /* soft-key rail: docks onto the edge of the SELECTED view; thin white key-lines
+     tie each on-screen button back to its physical bezel key on the right */
+  #rail-right{left:1748px;top:4px;gap:56px;z-index:25;transition:left .2s ease}
+  .stage[data-sel="left"]  #rail-right{left:804px}
+  /* thin solid key-line: flashes on selection, then fades away */
+  .keyline{position:absolute;left:924px;width:996px;height:1px;z-index:18;opacity:0;
+    pointer-events:none;background:rgba(255,255,255,.8);
+    filter:drop-shadow(0 1px 1px rgba(0,0,0,.5));transition:opacity .6s ease}
+  .keyline.show{opacity:1;transition:opacity .15s ease}
+  #kl1{top:87px} #kl2{top:263px} #kl3{top:439px}
+  #drone-switch{left:0;top:191px;z-index:26}
+
+  /* detection / target boxes (split — red) */
+  /* ===== targeting — DJI Pilot-style detection component ===== */
+  .target{position:absolute;z-index:5;pointer-events:none;font-family:var(--font)}
+  #tgt-left{left:471px;top:784px;width:179px;height:296px}
+  #tgt-right{left:567px;top:404px;width:113px;height:153px}
+  .target .frame{position:absolute;inset:0;border:1.5px solid rgba(255,64,64,.9);
+    box-shadow:0 0 8px rgba(0,0,0,.45), inset 0 0 8px rgba(0,0,0,.25)}
+  .target .cn{position:absolute;width:16px;height:16px;border:3px solid #ff4040;
+    filter:drop-shadow(0 0 3px rgba(0,0,0,.6));animation:lock 1.8s ease-in-out infinite}
+  .cn.tl{left:-2px;top:-2px;border-right:0;border-bottom:0}
+  .cn.tr{right:-2px;top:-2px;border-left:0;border-bottom:0}
+  .cn.bl{left:-2px;bottom:-2px;border-right:0;border-top:0}
+  .cn.br{right:-2px;bottom:-2px;border-left:0;border-top:0}
+  @keyframes lock{0%,100%{opacity:1}50%{opacity:.5}}
+  .target .dot{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;
+    background:#ff4040;border-radius:50%;box-shadow:0 0 0 2px rgba(0,0,0,.4)}
+  .target .tag{position:absolute;left:-2px;top:-40px;display:flex;align-items:center;gap:9px;
+    background:rgba(8,10,12,.78);padding:4px 10px;border-radius:4px;white-space:nowrap;line-height:1.1}
+  .target .tag .tid{background:#ff4040;color:#000;font-weight:700;font-size:15px;padding:1px 7px;border-radius:3px}
+  .target .tag .cls{font-weight:700;font-size:19px;color:#fff;letter-spacing:.6px}
+  .target .tag .conf{font-weight:700;font-size:19px;color:#ff8a8a;font-variant-numeric:tabular-nums}
+  .target .rng{position:absolute;left:50%;bottom:-38px;transform:translateX(-50%);
+    background:rgba(8,10,12,.78);color:#fff;font-weight:700;font-size:18px;padding:3px 11px;
+    border-radius:4px;white-space:nowrap;font-variant-numeric:tabular-nums}
+  /* live-detection layer: inner wrapper carries lock-on + tracking jitter,
+     so the outer .target stays free for the fullscreen morph */
+  .target .tk{position:absolute;inset:0}
+  .tk.acq{animation:acquire .5s cubic-bezier(.3,1.4,.4,1)}
+  .tk.acq .tag,.tk.acq .rng{animation:tagin .25s ease .3s backwards}
+  @keyframes acquire{0%{transform:scale(1.9);opacity:0}35%{opacity:1}70%{transform:scale(.94)}100%{transform:scale(1)}}
+  @keyframes tagin{from{opacity:0}to{opacity:1}}
+  /* first-contact identification phase: white dashed box while the classifier works */
+  .target .rng{transition:opacity .25s ease}
+  .tk.ident .frame{border-color:rgba(255,255,255,.85);border-style:dashed}
+  .tk.ident .cn{border-color:#fff;animation:none}
+  .tk.ident .dot{background:#fff}
+  .tk.ident .tag .tid{display:none}
+  .tk.ident .tag .cls{color:#fff}
+  .tk.ident .tag .conf{color:#fff}
+  .tk.ident .rng{opacity:0}
+  .tk.ident .thermal{display:none}
+  .target .thermal{position:absolute;left:22%;top:11%;width:56%;height:78%;background:#080808;overflow:hidden}
+  .target .thermal::after{content:"";position:absolute;inset:0;
+    background:radial-gradient(60% 44% at 50% 56%, #fff 0%, #d8d8d8 16%, #6a6a6a 40%, #202020 66%, #080808 100%)}
+
+  /* ===== heading tape — fighter HUD (boxed centre readout on the scale) ===== */
+  #heading{position:absolute;left:1260px;top:936px;width:360px;height:88px;z-index:16}
+  .hdg{position:absolute;inset:0;font-family:var(--font)}
+  .hdg-strip{position:absolute;left:0;top:0;width:360px;height:56px;overflow:hidden;
+    -webkit-mask:linear-gradient(90deg,transparent 0,#000 13%,#000 87%,transparent 100%);
+            mask:linear-gradient(90deg,transparent 0,#000 13%,#000 87%,transparent 100%)}
+  .hdg-strip canvas{width:360px;height:56px;display:block}
+  /* boxed current heading, centred ON the tape (like the reference's [230]) */
+  .hdg-box{position:absolute;left:50%;top:23px;transform:translateX(-50%);
+    display:inline-flex;align-items:center;justify-content:center;min-width:60px;
+    border:1.5px solid #82ffb4;border-radius:2px;padding:1px 8px 2px;background:transparent;
+    box-shadow:0 0 8px rgba(130,255,180,.28)}
+  .hdg-box .v{font-weight:700;font-size:29px;color:#82ffb4;letter-spacing:2px;
+    font-variant-numeric:tabular-nums;text-shadow:0 0 8px rgba(130,255,180,.55),0 1px 2px rgba(0,0,0,.75)}
+  .hdg-caret{position:absolute;left:50%;top:62px;transform:translateX(-50%);width:0;height:0;
+    border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:11px solid #82ffb4;
+    filter:drop-shadow(0 0 4px rgba(130,255,180,.6))}
+  .hdg[data-state="stale"] .hdg-box{border-color:#ffb020;box-shadow:0 0 8px rgba(255,176,32,.35)}
+  .hdg[data-state="stale"] .hdg-box .v{color:#ffb020;text-shadow:0 0 8px rgba(255,176,32,.5),0 1px 2px rgba(0,0,0,.75)}
+  .hdg[data-state="stale"] .hdg-caret{border-bottom-color:#ffb020}
+  .hdg[data-state="nodata"] .hdg-box{border-color:#8a9099;box-shadow:none}
+  .hdg[data-state="nodata"] .hdg-box .v{color:#8a9099;letter-spacing:5px;text-shadow:none}
+  .hdg[data-state="nodata"] .hdg-caret{border-bottom-color:#8a9099}
+
+  /* ===================== FULLSCREEN COCKPIT (node 893:2681) ===================== */
+  /* morph transition: the selected window WIDENS into full view (clip-path driven from JS) */
+  #fs{position:absolute;inset:0;z-index:60;background:#000;visibility:hidden}
+  .stage[data-fs="on"] .split{pointer-events:none}
+  #fs-feed{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  /* persistent chrome: rail, switch, collapse, tank target and heading MOVE (JS morph), they don't blink.
+     Only the top bar and the newly-revealed bunker fade in, quickly. */
+  #fs-pills,#fs .xtra,#fs-bunker{opacity:0;transition:opacity .2s ease}
+  .stage[data-fs="on"] #fs-pills,.stage[data-fs="on"] #fs .xtra,.stage[data-fs="on"] #fs-bunker{
+    opacity:1;transition:opacity .25s ease .12s}
+
+  /* top telemetry bar (dark, rounded) */
+  /* full-view telemetry uses the SAME style as the split telemetry (seamless morph);
+     extra items and the pill row are the only things that fade in */
+  #fs-telem{left:24px;top:24px;z-index:5}
+  #fs-pills{position:absolute;right:18px;top:18px;display:flex;gap:16px;align-items:stretch;z-index:5}
+  /* white pill buttons */
+  .pill{background:#fff;color:#000;border-radius:14px;height:126px;min-width:150px;border:none;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:0 22px;
+    font-weight:700;font-size:30px;transition:filter .12s,transform .05s}
+  .pill:hover{filter:brightness(.92)} .pill:active{transform:scale(.98)}
+  .pill .u{font-weight:500;font-size:24px}
+  .pill.wyp{flex-direction:row;gap:16px;font-size:32px}
+  .pill.wyp .ic{width:34px;height:34px}
+  .pill.sq{min-width:126px;width:126px;padding:0}
+  .pill.sq .g{width:52px;height:52px}
+
+  /* right rail */
+  /* aligned with the split rail: CAM 1 and EO keep the exact same on-screen position in both modes */
+  #fs-rail{position:absolute;left:1772px;top:204px;display:flex;flex-direction:column;gap:56px;z-index:6}
+  #fs-rail .btn{width:120px;height:120px}
+  #fs-rail .btn.dark{background:#121212}
+  .fs-rec{flex-direction:column;gap:10px}
+  .fs-rec .dot{width:26px;height:26px;border-radius:50%;background:#ff2323}
+  .fs-rec .lbl{font-size:30px}
+
+  /* corner panels */
+  #fs-switch{position:absolute;left:0;top:191px;z-index:6}   /* same spot as in side view */
+  #fs-collapse{position:absolute;left:0;bottom:70px;z-index:6}
+
+  /* detection boxes (fullscreen — white) */
+  /* "Target confirmed" toast (930:108) */
+  #fs-toast{position:absolute;left:50%;top:190px;transform:translateX(-50%);z-index:9;
+    background:#000;color:#fff;font-weight:700;font-size:30px;padding:14px 30px;border-radius:6px;
+    white-space:nowrap;transition:opacity .6s ease}
+  #fs-toast.hide{opacity:0;pointer-events:none}
+
+  #fs-tank{position:absolute;left:294px;top:840px;width:294px;height:150px}
+  #fs-bunker{position:absolute;left:1344px;top:930px;width:300px;height:156px}
+  #fs .tlab{z-index:5}
+
+  #fs-heading{position:absolute;left:768px;top:930px;width:360px;height:88px;z-index:6}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="viewport">
+  <main class="stage" id="stage" data-fs="on" data-sel="left" aria-label="Dual drone camera view">
+
+    <!-- ============ SPLIT VIEW ============ -->
+    <div class="split">
+      <div class="view sel" id="view-left" data-side="left">
+        <img src="assets/feed-left.png" alt="Drone I-G6400 camera feed">
+        <div class="target" id="tgt-left">
+          <div class="frame"></div>
+          <span class="cn tl"></span><span class="cn tr"></span><span class="cn bl"></span><span class="cn br"></span>
+          <span class="dot"></span>
+          <div class="tag"><span class="tid">T1</span><span class="cls">TANK</span><span class="conf">88%</span></div>
+          <div class="rng">400 m</div>
+        </div>
+      </div>
+
+      <div class="view" id="view-right" data-side="right">
+        <img src="assets/feed-right.png" alt="Drone S-G7799 camera feed">
+        <div class="target" id="tgt-right">
+          <div class="thermal"></div>
+          <div class="frame"></div>
+          <span class="cn tl"></span><span class="cn tr"></span><span class="cn bl"></span><span class="cn br"></span>
+          <div class="tag"><span class="tid">T2</span><span class="cls">TANK</span><span class="conf">88%</span></div>
+          <div class="rng">1 400 m</div>
+        </div>
+      </div>
+
+      <div class="telem left">
+        <div class="ti"><span class="ic">%%VEL%%</span><span>I-G6400</span></div>
+        <div class="ti"><span class="ic">%%SIG%%</span><span>Good</span></div>
+        <div class="ti"><span class="wind"><span>Wind</span><span>&rarr;</span></span><span>180&deg;, 12m/s</span></div>
+        <div class="ti"><span>AGL</span><span>240m</span></div>
+        <div class="ti hi"><span>SPD</span><span>3.4m/s</span></div>
+        <div class="ti hi"><span class="ic">%%ROUTE%%</span><span>WYP</span></div>
+      </div>
+
+      <div class="telem right">
+        <div class="ti"><span class="ic">%%VEL%%</span><span>S-G7799</span></div>
+        <div class="ti"><span class="ic">%%SIG%%</span><span>Good</span></div>
+        <div class="ti"><span class="wind"><span>Wind</span><span>&rarr;</span></span><span>180&deg;, 12m/s</span></div>
+        <div class="ti"><span>AGL</span><span>240m</span></div>
+        <div class="ti"><span>SPD</span><span>12m/s</span></div>
+        <div class="ti hi"><span class="ic">%%CAM%%</span><span>FBC</span></div>
+      </div>
+
+      <div class="panel" id="drone-switch">
+        <button class="btn" aria-label="Switch selected drone">%%SWITCH%%</button>
+      </div>
+
+      <div class="keyline" id="kl1" aria-hidden="true"></div>
+      <div class="keyline" id="kl2" aria-hidden="true"></div>
+      <div class="keyline" id="kl3" aria-hidden="true"></div>
+
+      <div class="panel" id="rail-right">
+        <button class="btn" aria-label="Map view">%%MAP%%</button>
+        <button class="btn"><span class="lbl">CAM 1</span></button>
+        <button class="btn"><span class="lbl">EO</span></button>
+      </div>
+
+      <div id="heading" class="compass" aria-hidden="true">%%COMPASS%%</div>
+    </div>
+
+    <!-- ============ FULLSCREEN COCKPIT ============ -->
+    <section id="fs" aria-label="Fullscreen view" aria-hidden="true">
+      <img id="fs-feed" src="assets/feed-left.png" alt="Selected drone camera feed">
+
+      <div class="telem" id="fs-telem">
+        <div class="ti"><span class="ic">%%VEL%%</span><span id="fs-id">I-G6400</span></div>
+        <div class="ti"><span class="ic">%%SIG%%</span><span>Good</span></div>
+        <div class="ti"><span class="wind"><span>Wind</span><span>&rarr;</span></span><span>180&deg;, 12m/s</span></div>
+        <div class="ti"><span>AGL</span><span>240m</span></div>
+        <div class="ti xtra"><span class="ic">%%BATT%%</span><span>32%</span></div>
+        <div class="ti xtra"><span class="ic">%%TEMP%%</span><span>40&deg;</span></div>
+      </div>
+      <div id="fs-pills">
+        <button class="pill"><span>ALT</span><span>200<span class="u">m</span></span></button>
+        <button class="pill"><span>SPD</span><span>3.4<span class="u">m/s</span></span></button>
+        <button class="pill"><span>Zoom</span><span>1<span class="u">x</span></span></button>
+        <button class="pill wyp"><span class="ic">%%ROUTE%%</span><span>WYP</span></button>
+        <button class="pill sq" id="fs-map" aria-label="Map view">%%MAP%%</button>
+      </div>
+
+      <div id="fs-rail">
+        <button class="btn"><span class="lbl">CAM 1</span></button>
+        <button class="btn"><span class="lbl">EO</span></button>
+        <button class="btn" aria-label="Snapshot">%%CAMBTN%%</button>
+        <button class="btn dark fs-rec" aria-label="Record"><span class="dot"></span><span class="lbl">REC</span></button>
+      </div>
+
+      <div class="panel" id="fs-switch">
+        <button class="btn" aria-label="Switch selected drone">%%SWITCH%%</button>
+      </div>
+
+      <div class="panel" id="fs-collapse">
+        <button class="btn" id="collapse-btn" aria-label="Open side view">%%BARS%%</button>
+      </div>
+
+      <div id="fs-toast" role="status">Target confirmed</div>
+
+      <div class="target" id="fs-tank">
+        <div class="frame"></div>
+        <span class="cn tl"></span><span class="cn tr"></span><span class="cn bl"></span><span class="cn br"></span>
+        <span class="dot"></span>
+        <div class="tag"><span class="tid">T1</span><span class="cls">TANK</span><span class="conf">88%</span></div>
+        <div class="rng">400 m</div>
+      </div>
+
+      <div class="target" id="fs-bunker">
+        <div class="frame"></div>
+        <span class="cn tl"></span><span class="cn tr"></span><span class="cn bl"></span><span class="cn br"></span>
+        <span class="dot"></span>
+        <div class="tag"><span class="tid">T3</span><span class="cls">BUNKER</span><span class="conf">76%</span></div>
+        <div class="rng">620 m</div>
+      </div>
+
+      <div id="fs-heading" class="compass" aria-hidden="true">%%COMPASS%%</div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ===== reusable SVG glyph templates ===== -->
+<template id="svg-lib">
+  <span data-k="VEL"><svg viewBox="0 0 28 28"><g stroke="#fff" stroke-width="2" fill="none"><line x1="8" y1="8" x2="20" y2="20"/><line x1="20" y1="8" x2="8" y2="20"/><circle cx="7" cy="7" r="3.4"/><circle cx="21" cy="7" r="3.4"/><circle cx="7" cy="21" r="3.4"/><circle cx="21" cy="21" r="3.4"/></g></svg></span>
+  <span data-k="SIG"><svg viewBox="0 0 28 28"><g fill="#fff"><rect x="1" y="18" width="4" height="8"/><rect x="8" y="13" width="4" height="13"/><rect x="15" y="8" width="4" height="18"/><rect x="22" y="3" width="4" height="23"/></g></svg></span>
+  <span data-k="BATT"><svg viewBox="0 0 28 28"><g fill="none" stroke="#fff" stroke-width="2"><rect x="2" y="9" width="21" height="11" rx="2"/></g><rect x="24.5" y="12" width="2.5" height="5" rx="1" fill="#fff"/><rect x="4" y="11" width="8" height="7" fill="#fff"/></svg></span>
+  <span data-k="TEMP"><svg viewBox="0 0 28 28" fill="none" stroke="#fff" stroke-width="2"><path d="M14 4.5 a3 3 0 0 1 3 3 v9 a5 5 0 1 1 -6 0 V7.5 a3 3 0 0 1 3 -3 Z"/><circle cx="14" cy="21" r="2.6" fill="#fff" stroke="none"/></svg></span>
+  <span data-k="ROUTE"><svg viewBox="0 0 28 28" fill="none" stroke="#000" stroke-width="2.4"><circle cx="7" cy="8" r="3"/><circle cx="21" cy="20" r="3"/><path d="M9.4 9.6 L14 14 L18.6 18.4"/></svg></span>
+  <span data-k="CAM"><svg viewBox="0 0 28 28" fill="none" stroke="#000" stroke-width="2.2"><rect x="3" y="8.5" width="22" height="14.5" rx="2.4"/><path d="M9.5 8.5 l2-3 h5 l2 3"/><circle cx="14" cy="15.6" r="4"/></svg></span>
+  <span data-k="CAMBTN"><svg class="g" viewBox="0 0 44 44" fill="none" stroke="#000" stroke-width="2.6"><rect x="5" y="13" width="34" height="22" rx="3"/><path d="M15 13 l3-5 h8 l3 5"/><circle cx="22" cy="24.5" r="6.5"/></svg></span>
+  <span data-k="SWITCH"><svg class="g" viewBox="0 0 44 44" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19 a13 13 0 0 1 22 -6"/><path d="M31 5 v9 h-9"/><path d="M35 25 a13 13 0 0 1 -22 6"/><path d="M13 39 v-9 h9"/></svg></span>
+  <span data-k="MAP"><svg class="g" viewBox="0 0 44 44" fill="none" stroke="#000" stroke-width="2.4" stroke-linejoin="round"><path d="M5 12 L16 8 L28 12 L39 8 V27 L28 31 L16 27 L5 31 Z"/><path d="M16 8 V27 M28 12 V21"/><path d="M28 20 a6 6 0 0 1 12 0 c0 5 -6 12 -6 12 s-6 -7 -6 -12 Z" fill="#000" stroke="none"/><circle cx="34" cy="20" r="2.4" fill="#fff"/></svg></span>
+  <span data-k="EXPAND"><svg class="g" viewBox="0 0 44 44" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M26 8 H36 V18"/><path d="M35 9 L25 19"/><path d="M18 36 H8 V26"/><path d="M9 35 L19 25"/></svg></span>
+  <span data-k="BARS"><svg class="g" viewBox="0 0 44 44"><g fill="#000"><rect x="12" y="10" width="8" height="24" rx="2"/><rect x="24" y="10" width="8" height="24" rx="2"/></g></svg></span>
+  <span data-k="COMPASS"><div class="hdg" data-state="ok">
+    <div class="hdg-strip"><canvas width="720" height="112"></canvas></div>
+    <div class="hdg-box"><span class="v">242</span></div>
+    <div class="hdg-caret"></div>
+  </div></span>
+</template>
+
+<script>
+  // inject glyphs into %%..%% placeholders
+  (function(){
+    const lib={};
+    document.getElementById('svg-lib').content.querySelectorAll('[data-k]').forEach(s=>lib[s.dataset.k]=s.innerHTML);
+    const root=document.getElementById('stage');
+    let html=root.innerHTML;
+    for(const k in lib) html=html.split('%%'+k+'%%').join(lib[k]);
+    root.innerHTML=html;
+  })();
+
+  const stage=document.getElementById('stage');
+  const vLeft=document.getElementById('view-left'), vRight=document.getElementById('view-right');
+  const fs=document.getElementById('fs'), fsFeed=document.getElementById('fs-feed'), fsId=document.getElementById('fs-id');
+  const FEEDS={left:{img:'assets/feed-left.png',id:'I-G6400'}, right:{img:'assets/feed-right.png',id:'S-G7799'}};
+
+  function fit(){ const s=Math.min(innerWidth/1920, innerHeight/1200);
+    const tx=(innerWidth-1920*s)/2, ty=(innerHeight-1200*s)/2;
+    stage.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')'; }
+  addEventListener('resize',fit); addEventListener('load',fit); fit();
+
+  // ---- selection: blue border marks the selected half ----
+  function select(side){
+    stage.dataset.sel=side;
+    vLeft.classList.toggle('sel', side==='left');
+    vRight.classList.toggle('sel', side==='right');
+    // key-lines: show briefly when the rail docks onto the left view, then fade out
+    const kls=[...document.querySelectorAll('.keyline')];
+    clearTimeout(select._klT);
+    if(side==='left'){
+      kls.forEach(k=>k.classList.add('show'));
+      select._klT=setTimeout(()=>kls.forEach(k=>k.classList.remove('show')),1500);
+    }else{
+      kls.forEach(k=>k.classList.remove('show'));
+    }
+  }
+  // single tap selects; DOUBLE TAP (any view, selected or not) -> main (fullscreen)
+  const DTAP=320; let lastTap={side:null,t:0};
+  [vLeft,vRight].forEach(v=>v.addEventListener('click',()=>{
+    const side=v.dataset.side, now=performance.now();
+    select(side);
+    if(lastTap.side===side && (now-lastTap.t)<DTAP){ lastTap={side:null,t:0}; openFS(); }
+    else lastTap={side,t:now};
+  }));
+  document.querySelector('#drone-switch .btn').addEventListener('click',e=>{
+    e.stopPropagation(); select(stage.dataset.sel==='left'?'right':'left');
+  });
+
+  // ---- fullscreen cockpit ----
+  // clip rectangles of the two split windows (the shape the full view morphs from/to)
+  const HALF={left:'inset(0px 972px 0px 0px)', right:'inset(0px 0px 10px 972px)'};
+  const MORPH='clip-path .45s cubic-bezier(.4,0,.2,1)';
+  const EASE='.45s cubic-bezier(.4,0,.2,1)';
+  let fsT=null;
+
+  // ---- persistent-chrome morphs: elements travel between their split and full-view spots ----
+  const fsRail=document.getElementById('fs-rail'), fsTank=document.getElementById('fs-tank'),
+        fsHead=document.getElementById('fs-heading'), fsTelem=document.getElementById('fs-telem');
+  function morphEl(el, transform, opening){
+    if(!el) return;
+    if(opening){
+      el.style.transition='none'; el.style.transform=transform;
+      void el.offsetWidth;
+      el.style.transition='transform '+EASE; el.style.transform='';
+    }else{
+      el.style.transition='transform '+EASE; el.style.transform=transform;
+    }
+  }
+  function chromeMorph(side, opening){
+    // rail: on OPEN it slides in from the split dock (x828 when left was selected);
+    // on CLOSE it stays put — the split lands unselected, with its rail on the right
+    if(opening) morphEl(fsRail, side==='left' ? 'translateX(-944px)' : '', true);
+    else { fsRail.style.transition='none'; fsRail.style.transform=''; }
+    // tank target: from the split detection box of that view to the full-view box (294,840,294x150)
+    const from = side==='left' ? {x:471,y:784,w:179,h:296} : {x:1539,y:404,w:113,h:153};
+    fsTank.style.transformOrigin='top left';
+    morphEl(fsTank,'translate('+(from.x-294)+'px,'+(from.y-840)+'px) scale('+(from.w/294)+','+(from.h/150)+')',opening);
+    // heading tape: split lives at x1260 -> full view at x768
+    morphEl(fsHead,'translateX(492px)',opening);
+    // telemetry: identical style to split; slides from x996 when coming from the right view
+    morphEl(fsTelem, side==='right' ? 'translateX(972px)' : '', opening);
+  }
+  function chromeReset(){
+    [fsRail,fsTank,fsHead,fsTelem].forEach(el=>{ if(el){ el.style.transition='none'; el.style.transform=''; } });
+  }
+  function openFS(animate=true){
+    const side=(stage.dataset.sel==='left')?'left':'right';
+    const f=FEEDS[side];
+    fsFeed.src=f.img; if(fsId) fsId.textContent=f.id;
+    clearTimeout(fsT);
+    if(animate){
+      fs.style.transition='none';
+      fs.style.clipPath=HALF[side];        // start as the selected window...
+      fs.style.visibility='visible';
+      void fs.offsetWidth;
+      fs.style.transition=MORPH;
+      fs.style.clipPath='inset(0px 0px 0px 0px)';   // ...and widen to full view
+      chromeMorph(side,true);              // rail/target/heading travel with it
+    }else{
+      fs.style.transition='none';
+      fs.style.clipPath='inset(0px 0px 0px 0px)';
+      fs.style.visibility='visible';
+      chromeReset();
+    }
+    stage.dataset.fs='on'; fs.setAttribute('aria-hidden','false');
+    if(window.acquireTargets)
+      window.acquireTargets(animate ? document.getElementById('fs-bunker') : fs);
+  }
+  function closeFS(){
+    const side=(stage.dataset.sel==='left')?'left':'right';
+    clearTimeout(fsT);
+    fs.style.transition=MORPH;
+    fs.style.clipPath=HALF[side];          // narrow back into its window
+    chromeMorph(side,false);               // rail/target/heading travel back to their split spots
+    stage.dataset.fs='off'; fs.setAttribute('aria-hidden','true');
+    fsT=setTimeout(()=>{ fs.style.visibility='hidden';
+      fs.style.transition='none'; fs.style.clipPath='inset(0px 0px 0px 0px)';
+      chromeReset(); },470);
+    // land in side view with a clean slate: nothing selected until the user taps
+    stage.dataset.sel='none';
+    vLeft.classList.remove('sel'); vRight.classList.remove('sel');
+    clearTimeout(select._klT);
+    document.querySelectorAll('.keyline').forEach(k=>k.classList.remove('show'));
+    if(window.acquireTargets) window.acquireTargets(document.querySelector('.split'));
+  }
+  document.getElementById('collapse-btn').addEventListener('click',e=>{e.stopPropagation();closeFS();});
+  // drone-switch inside fullscreen swaps the shown feed
+  document.querySelector('#fs-switch .btn').addEventListener('click',e=>{
+    e.stopPropagation(); select(stage.dataset.sel==='left'?'right':'left'); openFS();
+  });
+  addEventListener('keydown',e=>{ if(e.key==='Escape'&&stage.dataset.fs==='on') closeFS(); });
+
+  // ---- live-detection realism: lock-on, tracking jitter, confidence/range flicker ----
+  (function(){
+    const reduce=(typeof matchMedia==='function')&&matchMedia('(prefers-reduced-motion:reduce)').matches;
+    // wrap every target's contents so jitter/lock-on don't fight the fullscreen morph
+    document.querySelectorAll('.target').forEach(t=>{
+      const tk=document.createElement('div'); tk.className='tk';
+      while(t.firstChild) tk.appendChild(t.firstChild);
+      t.appendChild(tk);
+    });
+    const confs=[...document.querySelectorAll('.tag .conf')].map(e=>({e,base:parseInt(e.textContent,10)||88}));
+    const rngs=[...document.querySelectorAll('.target .rng')].map(e=>({e,base:parseInt(e.textContent.replace(/\D/g,''),10)||400}));
+    const fmt=v=> v>=1000 ? Math.floor(v/1000)+' '+String(v%1000).padStart(3,'0')+' m' : v+' m';
+    if(!reduce){
+      // AI confidence wobbles a touch, mostly downward (paused while a target is being identified)
+      setInterval(()=>{confs.forEach(c=>{
+        const tk=c.e.closest('.tk'); if(tk&&tk.classList.contains('ident')) return;
+        c.e.textContent=(c.base+[-2,-1,-1,0,0,0,0,1][Math.floor(Math.random()*8)])+'%';});},700);
+      // rangefinder returns drift ~0.5%
+      setInterval(()=>{rngs.forEach(r=>{
+        const j=Math.max(1,Math.round(r.base*.006));
+        r.e.textContent=fmt(r.base+Math.round((Math.random()*2-1)*j));});},900);
+      // tracking jitter: bounded random walk, ~9 Hz
+      const tks=[...document.querySelectorAll('.target .tk')].map(el=>({el,x:0,y:0,s:1}));
+      setInterval(()=>{tks.forEach(o=>{
+        o.x=Math.max(-2,Math.min(2,o.x+(Math.random()*2-1)*1.2));
+        o.y=Math.max(-2,Math.min(2,o.y+(Math.random()*2-1)*1.2));
+        o.s=Math.max(.994,Math.min(1.006,o.s+(Math.random()*2-1)*.004));
+        o.el.style.transform='translate('+o.x.toFixed(1)+'px,'+o.y.toFixed(1)+'px) scale('+o.s.toFixed(3)+')';});},110);
+    }
+    // lock-on flare: corners open wide and snap onto the target
+    function relock(tk){ tk.classList.remove('acq'); void tk.offsetWidth; tk.classList.add('acq'); }
+    // FIRST CONTACT: white dashed box, classifier ramps confidence up, class resolves,
+    // then the box confirms hostile (red), gets its ID and range, and locks with a pulse
+    function identify(tk,delay){
+      setTimeout(()=>{
+        tk.classList.add('ident'); relock(tk);
+        const conf=tk.querySelector('.conf'), cls=tk.querySelector('.cls');
+        if(!conf||!cls){ tk.classList.remove('ident'); return; }
+        const base=parseInt(conf.dataset.base||conf.textContent,10)||88; conf.dataset.base=base;
+        const clsTxt=cls.dataset.txt||cls.textContent; cls.dataset.txt=clsTxt;
+        cls.textContent='· · ·';
+        let v=15+Math.random()*10;
+        const iv=setInterval(()=>{
+          v+=4+Math.random()*6;
+          if(v>=55 && cls.textContent!==clsTxt) cls.textContent=clsTxt;   // classifier resolves
+          if(v>=base){ conf.textContent=base+'%'; clearInterval(iv);
+            tk.classList.remove('ident'); relock(tk); }                    // confirmed -> red lock
+          else conf.textContent=Math.round(v)+'%';
+        },90);
+      },delay||0);
+    }
+    // smart entry point: first sighting runs the full identification, later ones just re-lock
+    window.acquireTargets=scope=>{ if(reduce||!scope) return;
+      let n=0;
+      scope.querySelectorAll('.tk').forEach(tk=>{
+        const t=tk.closest('.target');
+        if(t&&!t.dataset.idd){ t.dataset.idd='1'; identify(tk,(n++)*300); }
+        else relock(tk);
+      });
+    };
+  })();
+
+  // ---- entry state: start on the single-drone view (930:108); the two-bars button opens side view ----
+  select('left'); openFS(false);   // no morph on first paint
+  const toast=document.getElementById('fs-toast');
+  if(toast) setTimeout(()=>toast.classList.add('hide'),3500);
+
+  // ===== heading tape (HUD moving tape) =====
+  (function(){
+    const strips=[...document.querySelectorAll('.hdg-strip canvas')];
+    const reads=[...document.querySelectorAll('.hdg-box')];
+    const hdgs=[...document.querySelectorAll('.hdg')];
+    if(!strips.length) return;
+    const PPD=9, DPR=2;                       // px per degree (css) / backing-store scale
+    const CARD={0:'N',90:'E',180:'S',270:'W'};
+    const st={val:242, mode:'ok'};            // mode: ok | stale | nodata
+    const reduce=(typeof matchMedia==='function')&&matchMedia('(prefers-reduced-motion:reduce)').matches;
+
+    function draw(cv,heading){
+      const ctx=cv.getContext&&cv.getContext('2d'); if(!ctx) return;
+      const w=cv.width/DPR, h=cv.height/DPR;              // 360 x 56
+      ctx.setTransform(DPR,0,0,DPR,0,0); ctx.clearRect(0,0,w,h);
+      const cx=w/2, half=Math.ceil((w/2)/PPD)+2;
+      const dim=(st.mode==='nodata');
+      const col= st.mode==='stale'?'#ffb020':(dim?'rgba(150,156,164,.75)':'#82ffb4');
+      const tickTop=8, majB=24, minB=17, labelY=46;       // ticks on top, 2-digit labels below
+      ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineCap='butt';
+      ctx.shadowColor= st.mode==='stale'?'rgba(255,176,32,.55)':(dim?'transparent':'rgba(130,255,180,.6)');
+      ctx.shadowBlur= dim?0:3;
+      const majors=[];
+      for(let deg=Math.floor(heading)-half; deg<=Math.ceil(heading)+half; deg++){
+        const dd=((deg%360)+360)%360;
+        if(dd%5!==0) continue;
+        const x=cx+(deg-heading)*PPD;
+        if(x<-26||x>w+26) continue;
+        const major=(dd%10===0);
+        ctx.lineWidth=major?2:1.1;
+        ctx.beginPath(); ctx.moveTo(x,tickTop); ctx.lineTo(x,major?majB:minB); ctx.stroke();
+        if(major) majors.push({dd,x});
+      }
+      // minimalist: label only the nearest major on each side of the centre box (2 values, no overlap)
+      let L=null,R=null;
+      majors.forEach(m=>{
+        if(m.x < cx-46){ if(!L||m.x>L.x) L=m; }
+        else if(m.x > cx+46){ if(!R||m.x<R.x) R=m; }
+      });
+      [L,R].forEach(m=>{ if(!m) return;
+        const card=CARD[m.dd]!==undefined;
+        ctx.font=(card?'700 19px':'700 16px')+' "Roboto Condensed","Roboto",sans-serif';
+        ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+        ctx.fillText(card?CARD[m.dd]:('0'+(m.dd/10)).slice(-2), m.x, labelY);
+      });
+    }
+    function render(){
+      const dd=((Math.round(st.val)%360)+360)%360;
+      hdgs.forEach(h=>h.dataset.state=st.mode);
+      reads.forEach(r=>{
+        r.querySelector('.v').textContent = (st.mode==='nodata') ? '---' : String(dd).padStart(3,'0');
+      });
+      strips.forEach(cv=>draw(cv,st.val));
+    }
+    render();   // static tape — no continuous motion; updates only via setHeading()
+    // control hook (data feed / testing): setHeading(deg, 'ok'|'stale'|'nodata')
+    window.setHeading=(deg,mode)=>{ if(typeof deg==='number') st.val=((deg%360)+360)%360; if(mode) st.mode=mode; render(); };
+  })();
+</script>
+</body>
+</html>
